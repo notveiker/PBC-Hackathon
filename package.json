@@ -1,0 +1,30 @@
+{
+  "name": "tron-x402-agent-commerce",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w server && npm run build -w web",
+    "start": "npm run start -w server",
+    "test": "npm run test -w server",
+    "check": "npm run build && npm run test",
+    "agent-demo": "node scripts/agent-demo.mjs",
+    "agent:auto": "tsx scripts/autonomous-agent.ts",
+    "agent:ai": "tsx scripts/ai-agent.ts",
+    "permission-setup": "tsx scripts/tron-permission-setup.ts",
+    "receipt-keys": "node scripts/generate-receipt-keys.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^6.33.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

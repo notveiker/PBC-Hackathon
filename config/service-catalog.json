@@ -1,0 +1,174 @@
+{
+  "merchants": [
+    {
+      "id": "market-alpha",
+      "name": "Market Alpha Research",
+      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "trust": {
+        "verificationStatus": "verified",
+        "trustScore": 92,
+        "riskTier": "low",
+        "identityClaims": [
+          "merchant-address-pinned",
+          "receipt-key-published",
+          "nile-only"
+        ],
+        "controls": [
+          "es256-receipts",
+          "onchain-verification",
+          "agent-policy-compatible"
+        ],
+        "profileVersion": 1
+      }
+    },
+    {
+      "id": "depth-vault",
+      "name": "Depth Vault Liquidity",
+      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "trust": {
+        "verificationStatus": "seeded",
+        "trustScore": 74,
+        "riskTier": "medium",
+        "identityClaims": [
+          "merchant-address-pinned",
+          "receipt-key-published",
+          "nile-only"
+        ],
+        "controls": [
+          "es256-receipts",
+          "onchain-verification",
+          "agent-policy-compatible"
+        ],
+        "profileVersion": 1
+      }
+    },
+    {
+      "id": "insight-labs",
+      "name": "Insight Labs",
+      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "trust": {
+        "verificationStatus": "verified",
+        "trustScore": 88,
+        "riskTier": "low",
+        "identityClaims": [
+          "merchant-address-pinned",
+          "receipt-key-published"
+        ],
+        "controls": [
+          "es256-receipts",
+          "onchain-verification"
+        ],
+        "profileVersion": 1
+      }
+    }
+  ],
+  "services": [
+    {
+      "id": "premium-quote",
+      "path": "/v1/agent/premium-quote",
+      "handler": "market-quote",
+      "productName": "AI Premium Quote API",
+      "merchantId": "market-alpha",
+      "category": "market-data",
+      "description": "Real-time TRX/USDT best bid and ask prices with spread in basis points. Sourced live from Binance order book.",
+      "returns": "bid, ask, spread (absolute and bps), bidQty, askQty, timestamp",
+      "pricing": {
+        "usdtUnits": "1000000",
+        "trxSun": 1000000
+      },
+      "trust": {
+        "riskCategory": "market-data",
+        "safeguards": [
+          "quoted-price-fixed",
+          "merchant-manifest-signed",
+          "receipt-proof"
+        ],
+        "minVerification": "verified"
+      }
+    },
+    {
+      "id": "market-depth",
+      "path": "/v1/agent/market-depth",
+      "handler": "market-depth",
+      "productName": "Market Depth Feed",
+      "merchantId": "depth-vault",
+      "category": "market-data",
+      "description": "TRX/USDT order book depth: top 5 bid and ask levels with size. Useful for slippage estimation and liquidity analysis.",
+      "returns": "bids[5] and asks[5] each with price and size, timestamp",
+      "pricing": {
+        "usdtUnits": "500000",
+        "trxSun": 500000
+      },
+      "trust": {
+        "riskCategory": "market-data",
+        "safeguards": [
+          "quoted-price-fixed",
+          "merchant-manifest-signed",
+          "receipt-proof"
+        ],
+        "minVerification": "seeded"
+      }
+    },
+    {
+      "id": "compliance-brief",
+      "path": "/v1/services/compliance-brief",
+      "handler": "static-json",
+      "productName": "Compliance Brief API",
+      "merchantId": "market-alpha",
+      "category": "content",
+      "description": "Signed pay-per-call compliance notes for a requested market. Demonstrates non-trading service delivery over the same TRON commerce rail.",
+      "returns": "brief summary, risk bullets, timestamp",
+      "pricing": {
+        "usdtUnits": "250000",
+        "trxSun": 250000
+      },
+      "trust": {
+        "riskCategory": "content",
+        "safeguards": [
+          "merchant-manifest-signed",
+          "receipt-proof",
+          "fixed-output-shape"
+        ],
+        "minVerification": "verified"
+      },
+      "staticResponse": {
+        "brief": "TRON settlement can gate access to premium compliance or research outputs the same way it gates market data.",
+        "bullets": [
+          "Per-call receipts give buyers durable proof of purchase.",
+          "Merchant manifests and public keys reduce spoofed endpoints.",
+          "The same transport works for content, tools, and API responses."
+        ]
+      }
+    },
+    {
+      "id": "insight-brief",
+      "path": "/v1/services/insight-brief",
+      "handler": "static-json",
+      "productName": "Insight Brief API",
+      "merchantId": "insight-labs",
+      "category": "analytics",
+      "description": "Reusable analytics brief delivered over the TRON commerce rail.",
+      "returns": "summary and signals",
+      "pricing": {
+        "usdtUnits": "300000",
+        "trxSun": 300000
+      },
+      "trust": {
+        "riskCategory": "analytics",
+        "safeguards": [
+          "merchant-manifest-signed",
+          "receipt-proof"
+        ],
+        "minVerification": "verified"
+      },
+      "staticResponse": {
+        "summary": "This service proves onboarding works without code edits.",
+        "signals": [
+          "registry-updated",
+          "merchant-onboarded",
+          "service-onboarded"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "merchants": [
+    {
+      "id": "merchant-one",
+      "name": "Merchant One",
+      "address": "TReplaceWithMerchantAddress1",
+      "trust": {
+        "verificationStatus": "verified",
+        "trustScore": 90,
+        "riskTier": "low",
+        "identityClaims": ["merchant-address-pinned", "receipt-key-published", "nile-only"],
+        "controls": ["es256-receipts", "onchain-verification", "agent-policy-compatible"],
+        "profileVersion": 1
+      }
+    }
+  ],
+  "services": [
+    {
+      "id": "custom-brief",
+      "path": "/v1/services/custom-brief",
+      "handler": "static-json",
+      "productName": "Custom Brief API",
+      "merchantId": "merchant-one",
+      "category": "content",
+      "description": "Example non-market-data paid service carried over the same TRON commerce rail.",
+      "returns": "JSON content payload",
+      "pricing": {
+        "usdtUnits": "250000",
+        "trxSun": 250000
+      },
+      "trust": {
+        "riskCategory": "content",
+        "safeguards": ["merchant-manifest-signed", "receipt-proof"],
+        "minVerification": "verified"
+      },
+      "staticResponse": {
+        "message": "Replace this with your own service payload."
+      }
+    }
+  ]
+}
