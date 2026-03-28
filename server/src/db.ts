@@ -100,6 +100,31 @@ export function openDb(dbFilePath: string): Database.Database {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_risk_events_created ON risk_events(created_at DESC);
+    CREATE TABLE IF NOT EXISTS escrows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      escrow_id INTEGER NOT NULL,
+      service_id TEXT NOT NULL,
+      buyer TEXT NOT NULL,
+      merchant TEXT NOT NULL,
+      amount_sun TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'created',
+      create_tx TEXT,
+      dispute_tx TEXT,
+      resolve_tx TEXT,
+      claim_tx TEXT,
+      dispute_reason TEXT,
+      buyer_pct INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_escrows_status ON escrows(status);
+    CREATE INDEX IF NOT EXISTS idx_escrows_buyer ON escrows(buyer);
+    CREATE TABLE IF NOT EXISTS agent_profiles (
+      address TEXT PRIMARY KEY,
+      metadata_uri TEXT NOT NULL,
+      reputation INTEGER NOT NULL DEFAULT 0,
+      total_transactions INTEGER NOT NULL DEFAULT 0,
+      registered_at INTEGER NOT NULL
+    );
   `);
   ensureColumn(
     db,
@@ -386,4 +411,180 @@ export function settlementSummary(db: Database.Database, merchantId?: string): {
     sum += BigInt(r.amount_units);
   }
   return { totalCount, totalUsdtLike: sum.toString(), since24h };
+}
+
+// ── Escrow CRUD ──────────────────────────────────────────────────────────────
+
+export type EscrowRow = {
+  id: number;
+  escrow_id: number;
+  service_id: string;
+  buyer: string;
+  merchant: string;
+  amount_sun: string;
+  status: string;
+  create_tx: string | null;
+  dispute_tx: string | null;
+  resolve_tx: string | null;
+  claim_tx: string | null;
+  dispute_reason: string | null;
+  buyer_pct: number | null;
+  created_at: number;
+};
+
+export function insertEscrow(
+  db: Database.Database,
+  input: {
+    escrowId: number;
+    serviceId: string;
+    buyer: string;
+    merchant: string;
+    amountSun: string;
+    createTx: string;
+  }
+): number {
+  const info = db.prepare(
+    `INSERT INTO escrows (escrow_id, service_id, buyer, merchant, amount_sun, status, create_tx, created_at)
+     VALUES (@escrowId, @serviceId, @buyer, @merchant, @amountSun, 'created', @createTx, @createdAt)`
+  ).run({
+    escrowId: input.escrowId,
+    serviceId: input.serviceId,
+    buyer: input.buyer,
+    merchant: input.merchant,
+    amountSun: input.amountSun,
+    createTx: input.createTx,
+    createdAt: Date.now(),
+  });
+  return Number(info.lastInsertRowid);
+}
+
+export function getEscrowByChainId(db: Database.Database, escrowId: number): EscrowRow | undefined {
+  return db.prepare(
+    `SELECT * FROM escrows WHERE escrow_id = ? ORDER BY created_at DESC LIMIT 1`
+  ).get(escrowId) as EscrowRow | undefined;
+}
+
+export function updateEscrowStatus(
+  db: Database.Database,
+  escrowId: number,
+  status: string,
+  extra?: { disputeTx?: string; resolveTx?: string; claimTx?: string; disputeReason?: string; buyerPct?: number }
+): void {
+  const sets = ["status = @status"];
+  const params: Record<string, unknown> = { escrowId, status };
+
+  if (extra?.disputeTx) { sets.push("dispute_tx = @disputeTx"); params.disputeTx = extra.disputeTx; }
+  if (extra?.resolveTx) { sets.push("resolve_tx = @resolveTx"); params.resolveTx = extra.resolveTx; }
+  if (extra?.claimTx) { sets.push("claim_tx = @claimTx"); params.claimTx = extra.claimTx; }
+  if (extra?.disputeReason) { sets.push("dispute_reason = @disputeReason"); params.disputeReason = extra.disputeReason; }
+  if (extra?.buyerPct !== undefined) { sets.push("buyer_pct = @buyerPct"); params.buyerPct = extra.buyerPct; }
+
+  db.prepare(`UPDATE escrows SET ${sets.join(", ")} WHERE escrow_id = @escrowId`).run(params);
+}
+
+export function listEscrows(
+  db: Database.Database,
+  opts: { limit: number; buyer?: string; merchant?: string; status?: string }
+): EscrowRow[] {
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts.buyer) { where.push("buyer = ?"); params.push(opts.buyer); }
+  if (opts.merchant) { where.push("merchant = ?"); params.push(opts.merchant); }
+  if (opts.status) { where.push("status = ?"); params.push(opts.status); }
+
+  const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  params.push(opts.limit);
+
+  return db.prepare(
+    `SELECT * FROM escrows ${clause} ORDER BY created_at DESC LIMIT ?`
+  ).all(...params) as EscrowRow[];
+}
+
+// ── Agent Profile CRUD ───────────────────────────────────────────────────────
+
+export type AgentProfileRow = {
+  address: string;
+  metadata_uri: string;
+  reputation: number;
+  total_transactions: number;
+  registered_at: number;
+};
+
+export function upsertAgentProfile(
+  db: Database.Database,
+  input: { address: string; metadataUri: string; reputation?: number; totalTransactions?: number }
+): void {
+  db.prepare(
+    `INSERT INTO agent_profiles (address, metadata_uri, reputation, total_transactions, registered_at)
+     VALUES (@address, @metadataUri, @reputation, @totalTransactions, @registeredAt)
+     ON CONFLICT(address) DO UPDATE SET
+       metadata_uri = @metadataUri,
+       reputation = COALESCE(@reputation, agent_profiles.reputation),
+       total_transactions = COALESCE(@totalTransactions, agent_profiles.total_transactions)`
+  ).run({
+    address: input.address,
+    metadataUri: input.metadataUri,
+    reputation: input.reputation ?? 0,
+    totalTransactions: input.totalTransactions ?? 0,
+    registeredAt: Date.now(),
+  });
+}
+
+export function getAgentProfile(db: Database.Database, address: string): AgentProfileRow | undefined {
+  return db.prepare(`SELECT * FROM agent_profiles WHERE address = ?`).get(address) as AgentProfileRow | undefined;
+}
+
+export function updateAgentReputation(db: Database.Database, address: string, delta: number): void {
+  db.prepare(`UPDATE agent_profiles SET reputation = reputation + ? WHERE address = ?`).run(delta, address);
+}
+
+export function listAgentProfiles(db: Database.Database, limit: number = 50): AgentProfileRow[] {
+  return db.prepare(
+    `SELECT * FROM agent_profiles ORDER BY reputation DESC LIMIT ?`
+  ).all(limit) as AgentProfileRow[];
+}
+
+export function spendingReport(
+  db: Database.Database,
+  payer: string,
+  sinceMsAgo: number = 24 * 60 * 60 * 1000
+): {
+  payer: string;
+  totalUsdtUnits: string;
+  totalTrxSun: string;
+  txCount: number;
+  merchantBreakdown: { merchantId: string; count: number; totalUnits: string }[];
+} {
+  const since = Date.now() - sinceMsAgo;
+  const rows = db.prepare(
+    `SELECT merchant_id, asset, amount_units FROM settlements WHERE payer = ? AND created_at >= ?`
+  ).all(payer, since) as { merchant_id: string; asset: string; amount_units: string }[];
+
+  let totalUsdt = 0n;
+  let totalTrx = 0n;
+  const merchants = new Map<string, { count: number; total: bigint }>();
+
+  for (const r of rows) {
+    const amt = BigInt(r.amount_units);
+    if (r.asset === "USDT") totalUsdt += amt;
+    else totalTrx += amt;
+
+    const m = merchants.get(r.merchant_id) ?? { count: 0, total: 0n };
+    m.count++;
+    m.total += amt;
+    merchants.set(r.merchant_id, m);
+  }
+
+  return {
+    payer,
+    totalUsdtUnits: totalUsdt.toString(),
+    totalTrxSun: totalTrx.toString(),
+    txCount: rows.length,
+    merchantBreakdown: Array.from(merchants.entries()).map(([merchantId, v]) => ({
+      merchantId,
+      count: v.count,
+      totalUnits: v.total.toString(),
+    })),
+  };
 }

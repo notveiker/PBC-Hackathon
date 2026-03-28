@@ -6,6 +6,9 @@ import rateLimit from "@fastify/rate-limit";
 import { assertMerchantConfigured, assertReceiptSecretForProd, config } from "./config.js";
 import { openDb, pendingPaymentSummary } from "./db.js";
 import { registerCommerceRoutes } from "./commerceRoutes.js";
+import { registerEscrowRoutes } from "./escrowRoutes.js";
+import { registerAgentRegistryRoutes } from "./agentRegistryRoutes.js";
+import { registerOpsecRoutes } from "./opsecRoutes.js";
 import { createTronWeb } from "./tronVerify.js";
 import { listMerchants, listServices } from "./serviceCatalog.js";
 
@@ -57,6 +60,9 @@ export async function buildServer() {
   }));
 
   registerCommerceRoutes(app, db, tronWeb);
+  registerEscrowRoutes(app, db, tronWeb);
+  registerAgentRegistryRoutes(app, db, tronWeb);
+  registerOpsecRoutes(app, db, tronWeb);
 
   return app;
 }

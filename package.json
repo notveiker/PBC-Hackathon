@@ -18,13 +18,20 @@
     "agent:auto": "tsx scripts/autonomous-agent.ts",
     "agent:ai": "tsx scripts/ai-agent.ts",
     "permission-setup": "tsx scripts/tron-permission-setup.ts",
-    "receipt-keys": "node scripts/generate-receipt-keys.mjs"
+    "receipt-keys": "node scripts/generate-receipt-keys.mjs",
+    "contracts:compile": "tsx contracts/compile.ts",
+    "contracts:deploy": "tsx contracts/deploy.ts",
+    "contracts:verify": "tsx contracts/verify.ts",
+    "agent:enhanced": "tsx scripts/enhanced-agent-demo.ts",
+    "go-live": "tsx scripts/go-live.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "openai": "^6.33.0"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "solc": "^0.8.34",
+    "tsx": "^4.19.3"
   }
 }

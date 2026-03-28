@@ -1,23 +1,69 @@
-# Nile Commerce Gateway — TRON × HTTP 402 (agents & pay-per-use APIs)
+# Nile Commerce Gateway v2 — TRON × HTTP 402 × Smart Contracts (agents & pay-per-use APIs)
 
 A **product-shaped** demo for **AI + commerce on TRON**: priced HTTP APIs return **402 Payment Required**, settlement is verified on **Nile** (TRX or **USDT TRC-20**), the server issues **asymmetrically signed JWT settlement receipts**, and every paid unlock is written to a **SQLite audit log** with a merchant dashboard — not “chat + transfer.”
 
-**Core insight:** TRON is not only the payment rail here; it is also the trust and safety layer for autonomous buyers through payment verification and constrained account permissions.
+**Core insight:** TRON is not only the payment rail here; it is also the trust and safety layer for autonomous buyers through payment verification, on-chain escrow with dispute resolution, agent identity/reputation, OPSEC tooling, and constrained account permissions.
 
-**Primary demo use case:** an AI trading or analytics agent purchasing premium market data on demand with TRON settlement.
+**Primary demo use case:** an AI trading or analytics agent purchasing premium market data on demand with TRON settlement — with full agentic chargeback protection, on-chain identity, and spending governance.
+
+## v2 Enhancements — 7 of 8 Bounty Directions Covered
+
+| Bounty Direction | How We Cover It |
+|---|---|
+| **Agentic commerce standards** | x402 flow + enhanced LLM agent with 7 tools + self-registration |
+| **UCP on TRON** | Service registry with signed JWT manifests + on-chain AgentRegistry |
+| **x402-style payments** | Core HTTP 402 → TRON Nile → JWT receipt flow |
+| **Micro-transaction enablement** | Pay-per-call + metered receipts + spending reports + budget tracking |
+| **Discovery + trust beyond ERC-8004** | AgentRegistry smart contract with mutable gateway-attested reputation |
+| **Security-centric agent execution** | TRON multi-sig permissions + OPSEC simulation + escrow |
+| **Agentic chargeback / dispute** | EscrowPayment smart contract with time-lock + arbitrator resolution |
+| **OPSEC dev tooling** | Transaction simulator, contract risk analyzer, spending tracker |
+
+### Smart Contracts (new in v2)
+
+- **EscrowPayment.sol** — On-chain escrow with time-locked release and dispute resolution. Buyers deposit TRX, merchants claim after lock period, buyers can dispute, arbitrator resolves by splitting funds.
+- **AgentRegistry.sol** — On-chain agent identity with mutable reputation. Self-registration with metadata URI, gateway-attested reputation scores, transaction tracking.
+
+### New API Endpoints (v2)
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/v1/escrow/info` | GET | Contract address and ABI |
+| `/v1/escrow/record` | POST | Record on-chain escrow creation |
+| `/v1/escrow/:id` | GET | Escrow status (on-chain + local) |
+| `/v1/escrow/:id/dispute` | POST | Initiate dispute |
+| `/v1/escrow/:id/resolve` | POST | Arbitrator resolves |
+| `/v1/escrow` | GET | List escrows |
+| `/v1/agents/register` | POST | Register agent identity |
+| `/v1/agents/:address` | GET | Agent profile + reputation |
+| `/v1/agents` | GET | All registered agents |
+| `/v1/opsec/simulate` | POST | Dry-run transaction safety check |
+| `/v1/opsec/analyze-contract` | POST | Contract risk analysis |
+| `/v1/opsec/spending-report` | GET | Spending summary + budget usage |
+
+### Enhanced AI Agent (v2)
+
+The LLM agent now has 7 tools: `list_services`, `purchase_data`, `simulate_payment`, `register_identity`, `check_reputation`, `spending_report`, plus `create_escrow` support. The agent self-registers on-chain, runs OPSEC checks before every payment, and tracks spending.
+
+### Enhanced Frontend (v2)
+
+Three new UI tabs: **Escrow** (create/dispute/resolve with timeline), **Agents** (register/lookup with reputation badges), **OPSEC** (transaction simulator, contract analyzer, spending dashboard with budget bars).
 
 ## Why This Should Score Well
 
-This repo is not just a trading demo. It is a **reusable TRON agent-commerce primitive**:
+This repo is not just a trading demo. It is a **reusable TRON agent-commerce primitive** covering **7 of 8 bounty directions**:
 
 - **x402 on TRON:** services return `402 Payment Required`, then unlock on verified TRON settlement
+- **On-chain escrow:** EscrowPayment smart contract with time-locked release and dispute resolution — the first agentic chargeback layer for pay-per-call commerce
+- **Agent identity beyond ERC-8004:** AgentRegistry smart contract with mutable, gateway-attested reputation — agents earn trust through completed transactions
+- **OPSEC dev tooling:** transaction simulator, contract risk analyzer, and spending tracker that agents call before signing — a safety net preventing scams
 - **Marketplace-ready:** multiple merchants can publish priced services through a signed registry
-- **Agent-safe:** autonomous buyers verify manifests, enforce spend policy, and refuse suspicious quotes
+- **Agent-safe:** autonomous buyers verify manifests, enforce spend policy, run OPSEC simulations, and refuse suspicious quotes
 - **Verifiable:** every unlock maps to an on-chain tx, signed receipt, merchant ledger row, and public verification key
 - **Generalizable:** the same rail works for market data, content, analytics, and any fixed-shape API response
 
 If a judge asks “why TRON?”, the answer is:
-TRON is not just the payment token here. It is the settlement rail, the verification source of truth, and the safety model through Account Permission Management.
+TRON is not just the payment token here. It is the settlement rail, the verification source of truth, the escrow and dispute resolution layer, the agent identity registry, and the safety model through Account Permission Management.
 
 Tooling matches TRON’s own getting-started guidance (**Node 20+**, **TronWeb**, **TronLink**, **Nile**): [Getting Started with TRON Development](https://forum.trondao.org/t/getting-started-with-tron-development/30818).
 
@@ -34,37 +80,37 @@ The forum post is the canonical “stack + testnet + tools” overview. This pro
 | **Test tokens** | [Nile faucet](https://nileex.io/join/getJoinPage), [testnet tokens doc](https://developers.tron.network/docs/getting-testnet-tokens-on-tron), or Telegram [TRON Official Developer Group](https://t.me/TronOfficialDevelopersGroupEn) with `!nile <YOUR_TRON_ADDRESS>` as in §6.1. |
 | **TRX / Bandwidth & Energy** | USDT TRC-20 transfers need **Energy**; TRX transfers use **Bandwidth** — see UI “Fees & pitfalls” and §3.2 / §7.3 in the guide. |
 | **TRC-20** | Default `PAYMENT_ASSET=USDT` (Nile USDT contract aligned with faucet). |
-| **TronBox / TronIDE / Solidity** | Not required here; the guide’s TronBox flow is for **on-chain** contracts. Optional follow-up: deploy a contract and still settle to the same merchant address. |
+| **Solidity** | **EscrowPayment.sol** and **AgentRegistry.sol** compiled with `solc` and deployed via TronWeb — no TronBox dependency. |
 | **Further resources** | [TRON Developer Hub](https://developers.tron.network/), TronGrid, explorers — §7.1 / §8. |
 
 ## What’s included
 
 | Layer | Details |
 |-------|---------|
-| **Journey** | Product → Buyer/agent → Merchant tabs; OpenAPI link. |
-| **Marketplace registry** | Services are published through `/v1/registry` with merchant identity, recipient address, and price metadata. |
-| **Reusable protocol surface** | Generic priced services can be served from `/v1/services/:serviceId` using a JSON service catalog, not only hardcoded demo routes. |
+| **Journey** | 7-tab UI: Marketplace → Buy → Sell → Trust → Escrow → Agents → OPSEC; OpenAPI link. |
+| **Marketplace registry** | Services published via `/v1/registry` with merchant identity, recipient address, price metadata, and signed JWT manifests. |
+| **Smart contracts** | **EscrowPayment.sol** (escrow/dispute) + **AgentRegistry.sol** (identity/reputation) deployed on Nile. |
+| **OPSEC tooling** | Transaction simulator, contract risk analyzer, spending report with budget tracking. |
 | **Two SKUs** | `/v1/agent/premium-quote` and `/v1/agent/market-depth` (different prices, merchant-aware routing). |
 | **Settlement** | Default **USDT** on Nile (override `PAYMENT_ASSET=TRX`). |
 | **Receipts** | ES256 JWT (`iss`/`aud`/`exp` + `txId`, `resource`, `payer`) — verify with the public key or JWKS endpoint. |
-| **Persistence** | SQLite at `data/commerce.db` (tx uniqueness, merchant history). |
+| **Persistence** | SQLite at `data/commerce.db` (tx uniqueness, merchant history, escrows, agent profiles). |
 | **Recovery** | Pending payment sessions are persisted in SQLite, so slow Nile confirmations and restarts do not destroy the payment nonce. |
-| **Agent CLI** | `npm run agent-demo` — headless 402 smoke / retry with env vars. |
+| **Agent CLI** | `npm run agent:enhanced` — 7-step enhanced demo; `npm run agent:ai` — LLM-powered with 7 tools. |
 
 ## Fast Judge Pitch
 
-“This project brings x402-style agent payments to TRON for one concrete job: an AI trading or analytics agent buying premium market data on demand. The agent discovers paid services, receives a standardized 402 quote, verifies the merchant and service manifests, checks network, recipient, spend cap, and trust threshold, pays on Nile, gets an ES256 receipt, and the merchant records the unlock in SQLite. TRON matters here not just as settlement, but as the safety model through Account Permission Management.”
+“This project brings x402-style agent payments to TRON with **on-chain escrow, agent identity, and OPSEC tooling** — covering 7 of 8 bounty directions. An AI agent self-registers on our AgentRegistry smart contract, discovers paid services, runs an OPSEC safety simulation, pays through the standard x402 flow (or escrow for high-value purchases), earns on-chain reputation, and tracks spending against budget caps. If dissatisfied, the agent can dispute through the EscrowPayment contract with arbitrator resolution. TRON matters here not just as settlement, but as the escrow layer, the identity registry, and the safety model through Account Permission Management.”
 
 ## Judging criteria (how this maps)
 
 | Criterion | How the repo addresses it |
 |-----------|---------------------------|
-| **Product completeness** | Clear **roles** (Product / Buyer-agent / Merchant), **merchant-aware service registry**, **402 → pay → verify → JWT → session**, SQLite **audit log**, **OpenAPI**. |
-| **Real-world usefulness** | **Pay-per-use API** for agents/merchants (micropayment + receipt), **USDT**-style settlement option, **merchant dashboard** with settlement history. |
-| **Innovation** | **HTTP 402 + TRON verification** + **publicly verifiable signed receipts** + **merchant-aware registry** + **idempotency** + **agent CLI** — goes beyond “send token in chat.” |
-| **Technical correctness** | Server **re-fetches** txs via TronWeb, checks **recipient/amount/asset**, **rejects tx reuse**, stores **unique tx_id**; health exposes **expected Nile** context. |
-| **UX + edge cases** | **Network mismatch** banner (TronLink not on Nile), **friendly TronLink errors** (energy / rejected), API **`hint`** on verification failure, **Fees & pitfalls** panel. |
-| **Polish** | README, **`.env.example`**, one-command **`npm run dev`**, **demo script** in README + `npm run agent-demo`. |
+| **End-to-end completeness** | 7-tab UI (Product / Buy / Sell / Trust / Escrow / Agents / OPSEC), **402 → pay → verify → JWT → session**, SQLite **audit log**, **OpenAPI**, smart contracts deployed on Nile. |
+| **Security strength** | TRON multi-sig permissions, **OPSEC transaction simulator**, **contract risk analyzer**, **spending caps**, **escrow with dispute resolution**, **signed manifests**. |
+| **Standards alignment** | x402 / UCP-inspired design, AgentRegistry beyond ERC-8004, clean REST interfaces, OpenAPI spec, JWKS endpoint for receipt verification. |
+| **Innovation** | On-chain escrow for agentic chargeback + mutable reputation registry + OPSEC-as-a-service + LLM agent with 7 tools — **7 of 8 bounty directions in one cohesive system**. |
+| **Documentation** | Comprehensive README, `.env.example`, `npm run dev`, `npm run agent:enhanced`, contract deploy scripts, demo videos. |
 
 ## Prerequisites
 
@@ -87,11 +133,67 @@ npm install
 npm run dev
 ```
 
-- **API:** http://127.0.0.1:3001  
-- **UI:** http://127.0.0.1:5173  
-- **OpenAPI:** http://127.0.0.1:3001/openapi.json  
+### Deploy smart contracts (optional, for on-chain features)
+
+```bash
+# Compile Solidity contracts
+npm run contracts:compile
+
+# Deploy to Nile testnet (requires DEPLOYER_PRIVATE_KEY or GATEWAY_PRIVATE_KEY in .env)
+npm run contracts:deploy
+# → writes contracts/deployed.json with addresses
+# → add ESCROW_CONTRACT_ADDRESS and AGENT_REGISTRY_CONTRACT_ADDRESS to .env
+
+# Verify deployed contracts
+npm run contracts:verify
+```
+
+### Run the enhanced agent demo
+
+```bash
+# Requires: NILE_PAYER_PRIVATE_KEY in .env (funded Nile account)
+npm run agent:enhanced
+# → 7-step demo: register → discover → simulate → pay → verify → reputation → spending
+```
+
+### Full live on-chain verification (9 steps)
+
+```bash
+# Deploys contracts, registers agent, pays on-chain, creates escrow, updates reputation
+# Requires: GATEWAY_PRIVATE_KEY + NILE_PAYER_PRIVATE_KEY in .env, server running
+npm run go-live
+# → Produces verifiable tx hashes on Nile Tronscan for every step
+```
+
+- **API:** http://127.0.0.1:3001
+- **UI:** http://127.0.0.1:5173 (7 tabs: Marketplace / Buy / Sell / Trust / Escrow / Agents / OPSEC)
+- **OpenAPI:** http://127.0.0.1:3001/openapi.json
 
 The server reads `.env` from the **repository root**.
+
+### curl walkthrough (raw x402 flow)
+
+```bash
+# 1. Request data → get HTTP 402 with payment requirements
+curl -s http://127.0.0.1:3001/v1/agent/premium-quote | jq .
+
+# 2. Copy the nonce from the response, pay on Nile (TRX or USDT), then verify:
+curl -s http://127.0.0.1:3001/v1/agent/premium-quote \
+  -H "X-Payment-Nonce: <nonce-from-step-1>" \
+  -H "X-Payment-Tx-Id: <your-nile-txid>" | jq .
+
+# 3. Re-use the JWT receipt for session access (no second payment):
+curl -s http://127.0.0.1:3001/v1/agent/premium-quote \
+  -H "Authorization: Bearer <accessToken-from-step-2>" | jq .
+
+# 4. OPSEC: simulate a payment before signing
+curl -s -X POST http://127.0.0.1:3001/v1/opsec/simulate \
+  -H "Content-Type: application/json" \
+  -d '{"to":"<merchant-address>","amount":"1000000","asset":"TRX"}' | jq .
+
+# 5. Check agent reputation
+curl -s http://127.0.0.1:3001/v1/agents/<agent-address> | jq .
+```
 
 ## Public deployment
 

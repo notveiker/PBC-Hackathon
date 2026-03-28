@@ -58,6 +58,13 @@ export const config = {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
+  /** Smart contract addresses (deployed via contracts/deploy.ts) */
+  escrowContractAddress: process.env.ESCROW_CONTRACT_ADDRESS ?? "",
+  agentRegistryContractAddress: process.env.AGENT_REGISTRY_CONTRACT_ADDRESS ?? "",
+  /** Gateway private key for arbitrator/owner contract calls */
+  gatewayPrivateKey: process.env.GATEWAY_PRIVATE_KEY ?? "",
+  /** Simple API key for admin endpoints (reputation, resolve, onboard). Empty = no auth required (dev mode). */
+  adminApiKey: process.env.ADMIN_API_KEY ?? "",
 };
 
 export function assertMerchantConfigured(): void {
@@ -66,6 +73,15 @@ export function assertMerchantConfigured(): void {
       "MERCHANT_TRON_ADDRESS is not set. Set it to your Nile merchant wallet (Base58)."
     );
   }
+}
+
+/**
+ * Verify admin API key for privileged endpoints.
+ * Returns true if auth passes, false otherwise. When adminApiKey is empty (dev mode), always passes.
+ */
+export function checkAdminAuth(authHeader: string | undefined): boolean {
+  if (!config.adminApiKey) return true; // dev mode — no auth required
+  return authHeader === `Bearer ${config.adminApiKey}`;
 }
 
 export function assertReceiptSecretForProd(): void {

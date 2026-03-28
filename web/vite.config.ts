@@ -9,6 +9,7 @@ export default defineConfig({
       "/v1": { target: "http://127.0.0.1:3001", changeOrigin: true },
       "/health": { target: "http://127.0.0.1:3001", changeOrigin: true },
       "/openapi.json": { target: "http://127.0.0.1:3001", changeOrigin: true },
+      "/.well-known": { target: "http://127.0.0.1:3001", changeOrigin: true },
     },
   },
 });

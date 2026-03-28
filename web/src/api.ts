@@ -144,3 +144,107 @@ export async function fetchMerchantStatusFor(merchantId?: string): Promise<unkno
   const res = await fetch(`${apiBase}/v1/merchant/status${qp}`);
   return res.json();
 }
+
+// ── Escrow API ───────────────────────────────────────────────────────────
+
+export async function fetchEscrowInfo(): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/escrow/info`);
+  return res.json();
+}
+
+export async function recordEscrow(body: {
+  serviceId: string;
+  merchantAddress: string;
+  amountSun: string;
+  buyerAddress: string;
+  createTxId: string;
+  escrowId: number;
+}): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/escrow/record`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function fetchEscrow(id: number): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/escrow/${id}`);
+  return res.json();
+}
+
+export async function disputeEscrow(id: number, reason: string, disputeTxId?: string): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/escrow/${id}/dispute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason, disputeTxId }),
+  });
+  return res.json();
+}
+
+export async function resolveEscrow(id: number, buyerPct: number): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/escrow/${id}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ buyerPct }),
+  });
+  return res.json();
+}
+
+export async function fetchEscrowList(filters?: { buyer?: string; merchant?: string; status?: string }): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (filters?.buyer) params.set("buyer", filters.buyer);
+  if (filters?.merchant) params.set("merchant", filters.merchant);
+  if (filters?.status) params.set("status", filters.status);
+  const qp = params.toString() ? `?${params}` : "";
+  const res = await fetch(`${apiBase}/v1/escrow${qp}`);
+  return res.json();
+}
+
+// ── Agent Registry API ───────────────────────────────────────────────────
+
+export async function registerAgent(body: { address: string; metadataURI: string; registerTxId?: string }): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/agents/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function fetchAgent(address: string): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/agents/${address}`);
+  return res.json();
+}
+
+export async function fetchAgentList(): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/agents`);
+  return res.json();
+}
+
+// ── OPSEC API ────────────────────────────────────────────────────────────
+
+export async function simulateTransaction(body: { to: string; amount: string; asset: "TRX" | "USDT" }): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/opsec/simulate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function analyzeContract(address: string): Promise<unknown> {
+  const res = await fetch(`${apiBase}/v1/opsec/analyze-contract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address }),
+  });
+  return res.json();
+}
+
+export async function fetchSpendingReport(payer: string, sinceHours?: number): Promise<unknown> {
+  const params = new URLSearchParams({ payer });
+  if (sinceHours) params.set("since", String(sinceHours));
+  const res = await fetch(`${apiBase}/v1/opsec/spending-report?${params}`);
+  return res.json();
+}

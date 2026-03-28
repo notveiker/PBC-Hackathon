@@ -5,13 +5,23 @@ import {
   fetchMerchantSummary,
   fetchPaidResource,
   fetchRegistry,
+  fetchEscrowList,
+  fetchEscrow,
+  disputeEscrow,
+  resolveEscrow,
+  registerAgent,
+  fetchAgent,
+  fetchAgentList,
+  simulateTransaction,
+  analyzeContract,
+  fetchSpendingReport,
   type Error402Body,
   type PaymentRequired,
   type RegistryResponse,
 } from "./api";
 import { friendlyWalletError, getTronNetworkWarning } from "./walletErrors";
 
-type Tab = "home" | "buyer" | "merchant" | "security";
+type Tab = "home" | "buyer" | "merchant" | "security" | "escrow" | "agents" | "opsec";
 
 type TronWebLike = {
   defaultAddress: { base58: string };
@@ -164,6 +174,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [tronReady, setTronReady] = useState(false);
   const [networkWarning, setNetworkWarning] = useState<string | null>(null);
+  const [walletAddress, setWalletAddress] = useState("");
 
   const pushLog = useCallback((line: string) => {
     setLog((prev) => [`${new Date().toISOString()}  ${line}`, ...prev].slice(0, 60));
@@ -174,6 +185,7 @@ export function App() {
       const tw = getTronWeb();
       setTronReady(Boolean(tw));
       setNetworkWarning(getTronNetworkWarning(tw as TronWebLike | null));
+      setWalletAddress(tw?.defaultAddress?.base58 ?? "");
     };
     tick();
     const interval = window.setInterval(tick, 800);
@@ -568,6 +580,15 @@ const protocolSteps = [
           </button>
           <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>
             Trust
+          </button>
+          <button type="button" className={tab === "escrow" ? "active" : ""} onClick={() => setTab("escrow")}>
+            Escrow
+          </button>
+          <button type="button" className={tab === "agents" ? "active" : ""} onClick={() => setTab("agents")}>
+            Agents
+          </button>
+          <button type="button" className={tab === "opsec" ? "active" : ""} onClick={() => setTab("opsec")}>
+            OPSEC
           </button>
           <a className="tab-link" href="/openapi.json" target="_blank" rel="noreferrer">
             OpenAPI
@@ -1213,7 +1234,429 @@ const protocolSteps = [
             </section>
           </div>
         )}
+
+        {/* ── Escrow Tab ─────────────────────────────────────────────── */}
+        {tab === "escrow" && (
+          <EscrowPanel walletAddress={walletAddress} />
+        )}
+
+        {/* ── Agent Identity Tab ─────────────────────────────────────── */}
+        {tab === "agents" && (
+          <AgentsPanel walletAddress={walletAddress} />
+        )}
+
+        {/* ── OPSEC Tab ──────────────────────────────────────────────── */}
+        {tab === "opsec" && (
+          <OpsecPanel walletAddress={walletAddress} />
+        )}
       </main>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sub-panels for new tabs (kept as separate functions for clarity)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function EscrowPanel({ walletAddress }: { walletAddress: string }) {
+  const [escrows, setEscrows] = useState<unknown[]>([]);
+  const [lookupId, setLookupId] = useState("");
+  const [lookupResult, setLookupResult] = useState<unknown>(null);
+  const [disputeId, setDisputeId] = useState("");
+  const [disputeReason, setDisputeReason] = useState("");
+  const [resolveId, setResolveId] = useState("");
+  const [resolvePct, setResolvePct] = useState(50);
+  const [msg, setMsg] = useState("");
+
+  const loadEscrows = useCallback(async () => {
+    try {
+      const data = await fetchEscrowList(walletAddress ? { buyer: walletAddress } : undefined) as { rows?: unknown[] };
+      setEscrows(data.rows ?? []);
+    } catch { /* ignore */ }
+  }, [walletAddress]);
+
+  useEffect(() => { loadEscrows(); }, [loadEscrows]);
+
+  const statusColor = (s: string) =>
+    s === "created" ? "#3b82f6" : s === "disputed" ? "#f59e0b" : s === "released" ? "#10b981" : s === "resolved" ? "#8b5cf6" : "#6b7280";
+
+  return (
+    <div className="stack">
+      <section>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Agentic Chargeback</p>
+            <h2>On-Chain Escrow & Dispute Resolution</h2>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h3>How Escrow Works</h3>
+          <ol className="feature-list">
+            <li>Buyer deposits TRX into the EscrowPayment smart contract</li>
+            <li>Funds are time-locked (default: 20 blocks / ~1 minute on Nile)</li>
+            <li>If satisfied: merchant claims after lock expires</li>
+            <li>If unhappy: buyer disputes within lock period</li>
+            <li>Arbitrator (gateway) resolves disputes, splitting funds fairly</li>
+          </ol>
+          <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>
+            All state transitions emit on-chain events — fully verifiable on Nile explorer.
+          </p>
+        </div>
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Lookup Escrow</h3>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" as const }}>
+            <input aria-label="Escrow ID" placeholder="Escrow ID (0, 1, 2...)" value={lookupId} onChange={(e) => setLookupId(e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                const data = await fetchEscrow(Number(lookupId));
+                setLookupResult(data);
+                setMsg("");
+              } catch (e) { setMsg(String(e)); }
+            }}>Lookup</button>
+          </div>
+          {lookupResult ? (
+            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "16rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
+              {JSON.stringify(lookupResult, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Dispute an Escrow</h3>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" as const }}>
+            <input placeholder="Escrow ID" value={disputeId} onChange={(e) => setDisputeId(e.target.value)} style={{ width: "8rem" }} />
+            <input placeholder="Reason for dispute" value={disputeReason} onChange={(e) => setDisputeReason(e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="secondary" onClick={async () => {
+              try {
+                await disputeEscrow(Number(disputeId), disputeReason);
+                setMsg("Dispute filed successfully.");
+                loadEscrows();
+              } catch (e) { setMsg(String(e)); }
+            }}>Dispute</button>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Resolve Dispute (Arbitrator)</h3>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem", flexWrap: "wrap" as const }}>
+            <input placeholder="Escrow ID" value={resolveId} onChange={(e) => setResolveId(e.target.value)} style={{ width: "8rem" }} />
+            <label style={{ fontSize: "0.85rem" }}>Buyer refund %: {resolvePct}%</label>
+            <input type="range" min={0} max={100} value={resolvePct} onChange={(e) => setResolvePct(Number(e.target.value))} style={{ flex: 1 }} />
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                await resolveEscrow(Number(resolveId), resolvePct);
+                setMsg(`Escrow ${resolveId} resolved: ${resolvePct}% to buyer.`);
+                loadEscrows();
+              } catch (e) { setMsg(String(e)); }
+            }}>Resolve</button>
+          </div>
+        </div>
+
+        {msg && <p style={{ color: "#f59e0b", fontSize: "0.85rem", marginTop: "0.5rem" }}>{msg}</p>}
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Escrow History</h3>
+          <button type="button" className="secondary" onClick={loadEscrows} style={{ marginBottom: "0.5rem", fontSize: "0.8rem" }}>
+            Refresh
+          </button>
+          {escrows.length === 0 ? (
+            <p style={{ fontSize: "0.85rem", opacity: 0.6 }}>No escrows found.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="table" style={{ fontSize: "0.8rem", width: "100%" }}>
+                <thead>
+                  <tr><th>ID</th><th>Service</th><th>Buyer</th><th>Merchant</th><th>Amount</th><th>Status</th><th>Created</th></tr>
+                </thead>
+                <tbody>
+                  {(escrows as Array<{ escrowId: number; serviceId: string; buyer: string; merchant: string; amountSun: string; status: string; createdAt: string; explorerTx?: string }>).map((e) => (
+                    <tr key={e.escrowId}>
+                      <td>{e.escrowId}</td>
+                      <td>{e.serviceId}</td>
+                      <td title={e.buyer}>{e.buyer.slice(0, 8)}...</td>
+                      <td title={e.merchant}>{e.merchant.slice(0, 8)}...</td>
+                      <td>{(Number(e.amountSun) / 1e6).toFixed(2)}</td>
+                      <td><span style={{ color: statusColor(e.status), fontWeight: 600 }}>{e.status}</span></td>
+                      <td>{e.createdAt ? new Date(e.createdAt).toLocaleString() : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AgentsPanel({ walletAddress }: { walletAddress: string }) {
+  const [agents, setAgents] = useState<unknown[]>([]);
+  const [lookupAddr, setLookupAddr] = useState("");
+  const [lookupResult, setLookupResult] = useState<unknown>(null);
+  const [regUri, setRegUri] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const loadAgents = useCallback(async () => {
+    try {
+      const data = await fetchAgentList() as { agents?: unknown[] };
+      setAgents(data.agents ?? []);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { loadAgents(); }, [loadAgents]);
+
+  const badgeColor = (b: string) =>
+    b === "gold" ? "#f59e0b" : b === "silver" ? "#9ca3af" : b === "bronze" ? "#d97706" : "#ef4444";
+
+  return (
+    <div className="stack">
+      <section>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Discovery + Trust Beyond ERC-8004</p>
+            <h2>On-Chain Agent Identity & Reputation</h2>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h3>Register Agent Identity</h3>
+          <p style={{ fontSize: "0.85rem", opacity: 0.7, marginBottom: "0.5rem" }}>
+            Self-register on the AgentRegistry smart contract with a metadata URI. Your on-chain reputation will grow as you complete transactions.
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" as const }}>
+            <input placeholder="Metadata URI (IPFS or HTTP)" value={regUri} onChange={(e) => setRegUri(e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="primary" onClick={async () => {
+              if (!walletAddress) { setMsg("Connect TronLink first."); return; }
+              try {
+                const result = await registerAgent({ address: walletAddress, metadataURI: regUri || `https://agent.nile/${walletAddress}` });
+                setMsg(JSON.stringify(result));
+                loadAgents();
+              } catch (e) { setMsg(String(e)); }
+            }}>Register</button>
+          </div>
+          {walletAddress && (
+            <p style={{ fontSize: "0.8rem", opacity: 0.6 }}>Wallet: {walletAddress}</p>
+          )}
+        </div>
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Lookup Agent Profile</h3>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" as const }}>
+            <input placeholder="TRON address (T...)" value={lookupAddr} onChange={(e) => setLookupAddr(e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                const data = await fetchAgent(lookupAddr);
+                setLookupResult(data);
+              } catch (e) { setMsg(String(e)); }
+            }}>Lookup</button>
+          </div>
+          {lookupResult ? (
+            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "16rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
+              {JSON.stringify(lookupResult, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+
+        {msg && <p style={{ color: "#3b82f6", fontSize: "0.85rem", marginTop: "0.5rem" }}>{msg}</p>}
+
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Registered Agents</h3>
+          <button type="button" className="secondary" onClick={loadAgents} style={{ marginBottom: "0.5rem", fontSize: "0.8rem" }}>
+            Refresh
+          </button>
+          {agents.length === 0 ? (
+            <p style={{ fontSize: "0.85rem", opacity: 0.6 }}>No agents registered yet.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="table" style={{ fontSize: "0.8rem", width: "100%" }}>
+                <thead>
+                  <tr><th>Address</th><th>Reputation</th><th>Badge</th><th>Transactions</th><th>Registered</th></tr>
+                </thead>
+                <tbody>
+                  {(agents as Array<{ address: string; reputation: number; badge: string; totalTransactions: number; registeredAt: string }>).map((a) => (
+                    <tr key={a.address}>
+                      <td title={a.address}>{a.address.slice(0, 10)}...{a.address.slice(-4)}</td>
+                      <td>{a.reputation}</td>
+                      <td><span style={{ color: badgeColor(a.badge), fontWeight: 700, textTransform: "uppercase" }}>{a.badge}</span></td>
+                      <td>{a.totalTransactions}</td>
+                      <td>{new Date(a.registeredAt).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OpsecPanel({ walletAddress }: { walletAddress: string }) {
+  const [simTo, setSimTo] = useState("");
+  const [simAmount, setSimAmount] = useState("1000000");
+  const [simAsset, setSimAsset] = useState<"TRX" | "USDT">("USDT");
+  const [simResult, setSimResult] = useState<unknown>(null);
+  const [analyzeAddr, setAnalyzeAddr] = useState("");
+  const [analyzeResult, setAnalyzeResult] = useState<unknown>(null);
+  const [spendingResult, setSpendingResult] = useState<unknown>(null);
+  const [msg, setMsg] = useState("");
+
+  return (
+    <div className="stack">
+      <section>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">OPSEC Dev Tooling</p>
+            <h2>Transaction Safety & Spending Governance</h2>
+          </div>
+        </div>
+
+        {/* Transaction Simulator */}
+        <div className="panel">
+          <h3>Transaction Simulator</h3>
+          <p style={{ fontSize: "0.85rem", opacity: 0.7, marginBottom: "0.5rem" }}>
+            Dry-run a payment before signing. Checks: recipient known? amount within cap? scam patterns? account active?
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+            <input aria-label="Recipient address" placeholder="Recipient (T...)" value={simTo} onChange={(e) => setSimTo(e.target.value)} style={{ flex: 2, minWidth: "200px" }} />
+            <input placeholder="Amount (minimal units)" value={simAmount} onChange={(e) => setSimAmount(e.target.value)} style={{ flex: 1, minWidth: "120px" }} />
+            <select value={simAsset} onChange={(e) => setSimAsset(e.target.value as "TRX" | "USDT")}>
+              <option value="USDT">USDT</option>
+              <option value="TRX">TRX</option>
+            </select>
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                const data = await simulateTransaction({ to: simTo, amount: simAmount, asset: simAsset });
+                setSimResult(data);
+                setMsg("");
+              } catch (e) { setMsg(String(e)); }
+            }}>Simulate</button>
+          </div>
+
+          {simResult ? (() => {
+            const r = simResult as { safe?: boolean; riskLevel?: string; checks?: Array<{ check: string; passed: boolean; detail?: string }>; warnings?: string[]; summary?: string };
+            return (
+              <div style={{ marginTop: "0.5rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                  <span style={{ fontSize: "1.5rem" }}>{r.safe ? "\u2705" : "\u26A0\uFE0F"}</span>
+                  <strong style={{ color: r.safe ? "#10b981" : "#ef4444" }}>{r.summary}</strong>
+                </div>
+                {r.checks?.map((c, i) => (
+                  <div key={i} style={{ display: "flex", gap: "0.5rem", fontSize: "0.8rem", padding: "0.25rem 0" }}>
+                    <span>{c.passed ? "\u2705" : "\u274C"}</span>
+                    <span style={{ fontWeight: 600 }}>{c.check}</span>
+                    <span style={{ opacity: 0.7 }}>{c.detail}</span>
+                  </div>
+                ))}
+                {(r.warnings?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "rgba(239,68,68,0.1)", borderRadius: "4px" }}>
+                    {r.warnings?.map((w, i) => <p key={i} style={{ fontSize: "0.8rem", color: "#ef4444" }}>{w}</p>)}
+                  </div>
+                )}
+              </div>
+            );
+          })() : null}
+        </div>
+
+        {/* Contract Analyzer */}
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Contract Risk Analyzer</h3>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" as const }}>
+            <input aria-label="Contract address" placeholder="Contract address (T...)" value={analyzeAddr} onChange={(e) => setAnalyzeAddr(e.target.value)} style={{ flex: 1 }} />
+            <button type="button" className="primary" onClick={async () => {
+              try {
+                const data = await analyzeContract(analyzeAddr);
+                setAnalyzeResult(data);
+              } catch (e) { setMsg(String(e)); }
+            }}>Analyze</button>
+          </div>
+          {analyzeResult ? (
+            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "14rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
+              {JSON.stringify(analyzeResult, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+
+        {/* Spending Report */}
+        <div className="panel" style={{ marginTop: "1rem" }}>
+          <h3>Spending Report</h3>
+          <p style={{ fontSize: "0.85rem", opacity: 0.7, marginBottom: "0.5rem" }}>
+            Track agent spending against budget caps. Shows per-merchant breakdown.
+          </p>
+          <button type="button" className="primary" onClick={async () => {
+            if (!walletAddress) { setMsg("Connect TronLink to see your spending."); return; }
+            try {
+              const data = await fetchSpendingReport(walletAddress);
+              setSpendingResult(data);
+            } catch (e) { setMsg(String(e)); }
+          }} style={{ marginBottom: "0.5rem" }}>
+            Load Spending Report
+          </button>
+
+          {spendingResult ? (() => {
+            const r = spendingResult as {
+              payer?: string; txCount?: number; totalUsdtUnits?: string; totalTrxSun?: string;
+              budgetUsage?: { usdtUsedPct?: number; trxUsedPct?: number };
+              merchantBreakdown?: Array<{ merchantId: string; count: number; totalUnits: string }>;
+            };
+            return (
+              <div>
+                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+                  <div className="metric-card">
+                    <span>Total Tx</span>
+                    <strong>{r.txCount ?? 0}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>USDT Spent</span>
+                    <strong>{((Number(r.totalUsdtUnits ?? 0)) / 1e6).toFixed(2)}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>TRX Spent</span>
+                    <strong>{((Number(r.totalTrxSun ?? 0)) / 1e6).toFixed(2)}</strong>
+                  </div>
+                </div>
+
+                {/* Budget bars */}
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <p style={{ fontSize: "0.8rem", marginBottom: "0.25rem" }}>USDT Budget: {r.budgetUsage?.usdtUsedPct ?? 0}%</p>
+                  <div style={{ height: "8px", background: "rgba(24,49,79,0.08)", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(r.budgetUsage?.usdtUsedPct ?? 0, 100)}%`, background: (r.budgetUsage?.usdtUsedPct ?? 0) > 80 ? "#ef4444" : "#10b981", transition: "width 0.3s" }} />
+                  </div>
+                  <p style={{ fontSize: "0.8rem", marginBottom: "0.25rem", marginTop: "0.5rem" }}>TRX Budget: {r.budgetUsage?.trxUsedPct ?? 0}%</p>
+                  <div style={{ height: "8px", background: "rgba(24,49,79,0.08)", borderRadius: "4px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(r.budgetUsage?.trxUsedPct ?? 0, 100)}%`, background: (r.budgetUsage?.trxUsedPct ?? 0) > 80 ? "#ef4444" : "#10b981", transition: "width 0.3s" }} />
+                  </div>
+                </div>
+
+                {(r.merchantBreakdown?.length ?? 0) > 0 && (
+                  <div>
+                    <h4 style={{ fontSize: "0.85rem", marginBottom: "0.25rem" }}>Per-Merchant Breakdown</h4>
+                    <table className="table" style={{ fontSize: "0.8rem", width: "100%" }}>
+                      <thead>
+                        <tr><th>Merchant</th><th>Transactions</th><th>Total (units)</th></tr>
+                      </thead>
+                      <tbody>
+                        {r.merchantBreakdown?.map((m) => (
+                          <tr key={m.merchantId}>
+                            <td>{m.merchantId}</td>
+                            <td>{m.count}</td>
+                            <td>{m.totalUnits}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })() : null}
+        </div>
+
+        {msg && <p style={{ color: "#f59e0b", fontSize: "0.85rem", marginTop: "0.5rem" }}>{msg}</p>}
+      </section>
     </div>
   );
 }

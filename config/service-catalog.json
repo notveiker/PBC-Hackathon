@@ -3,7 +3,7 @@
     {
       "id": "market-alpha",
       "name": "Market Alpha Research",
-      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "address": "TNpQx7Ujg7pdTm18HQc8Uzqz9go8JdnpQt",
       "trust": {
         "verificationStatus": "verified",
         "trustScore": 92,
@@ -24,7 +24,7 @@
     {
       "id": "depth-vault",
       "name": "Depth Vault Liquidity",
-      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "address": "TNpQx7Ujg7pdTm18HQc8Uzqz9go8JdnpQt",
       "trust": {
         "verificationStatus": "seeded",
         "trustScore": 74,
@@ -45,7 +45,7 @@
     {
       "id": "insight-labs",
       "name": "Insight Labs",
-      "address": "TUe12tGG9PU8TP3NV7U8orjKfc3ruk9wKX",
+      "address": "TNpQx7Ujg7pdTm18HQc8Uzqz9go8JdnpQt",
       "trust": {
         "verificationStatus": "verified",
         "trustScore": 88,

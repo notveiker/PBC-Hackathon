@@ -505,7 +505,7 @@ async function purchaseData(
 
 async function executeTool(
   toolName: string,
-  input: { service_path?: string },
+  input: { service_path?: string; to?: string; amount?: string; asset?: string; address?: string },
   tronWeb: InstanceType<typeof TronWeb>,
   usdtContract: string
 ): Promise<ToolResult> {
@@ -517,6 +517,52 @@ async function executeTool(
       return { error: "purchase_data requires service_path" };
     }
     return purchaseData(input.service_path, tronWeb, usdtContract);
+  }
+  if (toolName === "simulate_payment") {
+    try {
+      const res = await fetch(`${API_BASE}/v1/opsec/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: input.to, amount: input.amount, asset: input.asset }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { error: `Simulation failed: ${String(e)}` };
+    }
+  }
+  if (toolName === "register_identity") {
+    try {
+      const payerAddress = tronWeb.defaultAddress.base58;
+      const res = await fetch(`${API_BASE}/v1/agents/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: payerAddress,
+          metadataURI: `https://agent.nile/${payerAddress}/profile.json`,
+        }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { error: `Registration failed: ${String(e)}` };
+    }
+  }
+  if (toolName === "check_reputation") {
+    try {
+      const addr = input.address ?? tronWeb.defaultAddress.base58;
+      const res = await fetch(`${API_BASE}/v1/agents/${addr}`);
+      return await res.json();
+    } catch (e) {
+      return { error: `Reputation check failed: ${String(e)}` };
+    }
+  }
+  if (toolName === "spending_report") {
+    try {
+      const payerAddress = tronWeb.defaultAddress.base58;
+      const res = await fetch(`${API_BASE}/v1/opsec/spending-report?payer=${payerAddress}`);
+      return await res.json();
+    } catch (e) {
+      return { error: `Spending report failed: ${String(e)}` };
+    }
   }
   return { error: `Unknown tool: ${toolName}` };
 }
@@ -555,6 +601,55 @@ const tools: Anthropic.Tool[] = [
         },
       },
       required: ["service_path"],
+    },
+  },
+  {
+    name: "simulate_payment",
+    description:
+      "Run an OPSEC dry-run before signing a real payment. " +
+      "Checks if the recipient is a known merchant, amount is within caps, " +
+      "and detects scam patterns. ALWAYS call this before purchase_data.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        to: { type: "string", description: "Recipient TRON address" },
+        amount: { type: "string", description: "Amount in minimal units" },
+        asset: { type: "string", enum: ["TRX", "USDT"], description: "Asset type" },
+      },
+      required: ["to", "amount", "asset"],
+    },
+  },
+  {
+    name: "register_identity",
+    description:
+      "Register this agent's TRON address on the on-chain AgentRegistry. " +
+      "Call this once at the start of a session to establish verifiable identity.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "check_reputation",
+    description: "Check the on-chain reputation and trust badge of any agent address.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        address: { type: "string", description: "TRON address to check (omit for self)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "spending_report",
+    description:
+      "Get a summary of this agent's spending across all services, " +
+      "including budget usage percentages and per-merchant breakdown.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
     },
   },
 ];
@@ -599,6 +694,53 @@ const openAITools = [
         required: ["service_path"],
         additionalProperties: false,
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "simulate_payment",
+      description:
+        "Run an OPSEC dry-run before signing a real payment. ALWAYS call this before purchase_data.",
+      parameters: {
+        type: "object",
+        properties: {
+          to: { type: "string", description: "Recipient TRON address" },
+          amount: { type: "string", description: "Amount in minimal units" },
+          asset: { type: "string", enum: ["TRX", "USDT"], description: "Asset type" },
+        },
+        required: ["to", "amount", "asset"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "register_identity",
+      description: "Register this agent on the AgentRegistry. Call once at session start.",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_reputation",
+      description: "Check the on-chain reputation of any agent address.",
+      parameters: {
+        type: "object",
+        properties: { address: { type: "string", description: "TRON address to check" } },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "spending_report",
+      description: "Get this agent's spending summary with budget tracking.",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     },
   },
 ] as const;
