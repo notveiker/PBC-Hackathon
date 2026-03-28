@@ -31,6 +31,25 @@ export type RiskEventRow = {
   created_at: number;
 };
 
+export type UcpOrderRow = {
+  order_id: string;
+  service_id: string;
+  resource: string;
+  merchant_id: string;
+  buyer: string | null;
+  quantity: number;
+  asset: string;
+  amount_units: string;
+  recipient: string;
+  nonce: string;
+  raw_idempotency_key: string;
+  status: string;
+  payment_tx: string | null;
+  settlement_id: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
 type PendingPaymentRow = {
   nonce: string;
   amount_units: string;
@@ -125,6 +144,26 @@ export function openDb(dbFilePath: string): Database.Database {
       total_transactions INTEGER NOT NULL DEFAULT 0,
       registered_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS ucp_orders (
+      order_id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL,
+      resource TEXT NOT NULL,
+      merchant_id TEXT NOT NULL,
+      buyer TEXT,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      asset TEXT NOT NULL,
+      amount_units TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      nonce TEXT NOT NULL UNIQUE,
+      raw_idempotency_key TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'payment_required',
+      payment_tx TEXT,
+      settlement_id INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ucp_orders_status ON ucp_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_ucp_orders_service ON ucp_orders(service_id, created_at DESC);
   `);
   ensureColumn(
     db,
@@ -249,6 +288,19 @@ export function getPendingPayment(
 
 export function removePendingPayment(db: Database.Database, nonce: string): void {
   db.prepare(`DELETE FROM pending_payments WHERE nonce = ?`).run(nonce);
+}
+
+export function listPendingPayments(db: Database.Database, limit = 100): PendingPayment[] {
+  sweepExpiredPendingPayments(db);
+  const rows = db
+    .prepare(
+      `SELECT nonce, amount_units, recipient, merchant_id, asset, contract_address, created_at, idempotency_key
+       FROM pending_payments
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(limit) as PendingPaymentRow[];
+  return rows.map((row) => hydratePending(row)).filter((row): row is PendingPayment => Boolean(row));
 }
 
 export function pendingPaymentSummary(db: Database.Database): {
@@ -411,6 +463,78 @@ export function settlementSummary(db: Database.Database, merchantId?: string): {
     sum += BigInt(r.amount_units);
   }
   return { totalCount, totalUsdtLike: sum.toString(), since24h };
+}
+
+// ── UCP checkout / order tracking ───────────────────────────────────────────
+
+export function insertUcpOrder(
+  db: Database.Database,
+  input: {
+    orderId: string;
+    serviceId: string;
+    resource: string;
+    merchantId: string;
+    buyer?: string;
+    quantity: number;
+    asset: "TRX" | "USDT";
+    amountUnits: bigint;
+    recipient: string;
+    nonce: string;
+    rawIdempotencyKey: string;
+  }
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO ucp_orders (
+      order_id, service_id, resource, merchant_id, buyer, quantity, asset, amount_units,
+      recipient, nonce, raw_idempotency_key, status, created_at, updated_at
+    )
+    VALUES (
+      @orderId, @serviceId, @resource, @merchantId, @buyer, @quantity, @asset, @amountUnits,
+      @recipient, @nonce, @rawIdempotencyKey, 'payment_required', @createdAt, @updatedAt
+    )`
+  ).run({
+    orderId: input.orderId,
+    serviceId: input.serviceId,
+    resource: input.resource,
+    merchantId: input.merchantId,
+    buyer: input.buyer ?? null,
+    quantity: input.quantity,
+    asset: input.asset,
+    amountUnits: input.amountUnits.toString(),
+    recipient: input.recipient,
+    nonce: input.nonce,
+    rawIdempotencyKey: input.rawIdempotencyKey,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+export function getUcpOrder(
+  db: Database.Database,
+  orderId: string
+): UcpOrderRow | undefined {
+  return db.prepare(`SELECT * FROM ucp_orders WHERE order_id = ?`).get(orderId) as
+    | UcpOrderRow
+    | undefined;
+}
+
+export function markUcpOrderSettled(
+  db: Database.Database,
+  nonce: string,
+  txId: string,
+  settlementId: number
+): void {
+  db.prepare(
+    `UPDATE ucp_orders
+     SET status = 'fulfilled', payment_tx = @txId, settlement_id = @settlementId, updated_at = @updatedAt
+     WHERE nonce = @nonce`
+  ).run({
+    nonce,
+    txId,
+    settlementId,
+    updatedAt: Date.now(),
+  });
 }
 
 // ── Escrow CRUD ──────────────────────────────────────────────────────────────

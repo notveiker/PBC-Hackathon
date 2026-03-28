@@ -154,8 +154,81 @@ function capitalize(value: string | undefined): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function humanizeKey(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined) return "n/a";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "n/a";
+  if (typeof value === "object") return "Available";
+  return String(value);
+}
+
+async function copyText(value: string) {
+  if (typeof navigator === "undefined" || !navigator.clipboard) return false;
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const PATH_TO_TAB: Record<string, Tab> = {
+  "/marketplace": "home", "/buy": "buyer", "/sell": "merchant",
+  "/trust": "security", "/escrow": "escrow", "/agents": "agents", "/opsec": "opsec",
+};
+const TAB_TO_PATH: Record<Tab, string> = {
+  home: "/marketplace", buyer: "/buy", merchant: "/sell",
+  security: "/trust", escrow: "/escrow", agents: "/agents", opsec: "/opsec",
+};
+const TAB_LABELS: Record<Tab, string> = {
+  home: "Marketplace", buyer: "Buy", merchant: "Sell",
+  security: "Trust", escrow: "Escrow", agents: "Agents", opsec: "OPSEC",
+};
+
 export function App() {
-  const [tab, setTab] = useState<Tab>("home");
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof document !== "undefined") {
+      return (document.documentElement.getAttribute("data-theme") as "dark" | "light") ?? "dark";
+    }
+    return "dark";
+  });
+
+  const toggleTheme = useCallback(() => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+  }, [theme]);
+
+  const [isLanding, setIsLanding] = useState(() => window.location.pathname === "/");
+  const [tab, setTabRaw] = useState<Tab>(() => PATH_TO_TAB[window.location.pathname] ?? "home");
+
+  const setTab = useCallback((t: Tab) => {
+    setTabRaw(t);
+    setIsLanding(false);
+    window.history.pushState({}, "", TAB_TO_PATH[t]);
+  }, []);
+
+  const goHome = useCallback(() => {
+    setIsLanding(true);
+    window.history.pushState({}, "", "/");
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      const p = window.location.pathname;
+      if (p === "/") { setIsLanding(true); }
+      else { setIsLanding(false); setTabRaw(PATH_TO_TAB[p] ?? "home"); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [selectedServicePath, setSelectedServicePath] = useState("/v1/agent/premium-quote");
   const [selectedMerchantId, setSelectedMerchantId] = useState("all");
@@ -213,7 +286,11 @@ export function App() {
   }, [selectedMerchantId]);
 
   useEffect(() => {
-    if (tab === "merchant") loadMerchant();
+    if (tab === "merchant") {
+      loadMerchant();
+      const interval = window.setInterval(loadMerchant, 4000);
+      return () => window.clearInterval(interval);
+    }
     if (tab === "buyer") {
       fetchMerchantStatusFor().then(setMerchantInfo).catch(() => undefined);
     }
@@ -222,7 +299,7 @@ export function App() {
   const formatApiFailure = (status: number, json: unknown): string => {
     const o = json as { message?: string; hint?: string; error?: string };
     const parts = [`HTTP ${status}`, o.error, o.message, o.hint ? `Hint: ${o.hint}` : null].filter(Boolean);
-    return parts.join(" — ");
+    return parts.join(" - ");
   };
 
   const resetFlow = () => {
@@ -249,13 +326,26 @@ export function App() {
       }
     }
     setError(formatApiFailure(status, json));
-    pushLog(`Unexpected HTTP ${status} ${JSON.stringify(json)}`);
+    pushLog(`Unexpected HTTP ${status}. Review the response and try again.`);
   };
 
-  const broadcastResultTxid = (sent: {
-    txid?: string;
-    transaction?: { txID?: string };
-  }): string | undefined => sent.txid ?? sent.transaction?.txID;
+  const broadcastResultTxid = (
+    sent:
+      | string
+      | {
+          txid?: string;
+          txID?: string;
+          result?: boolean | { txid?: string; txID?: string };
+          transaction?: { txID?: string };
+        }
+      | undefined
+  ): string | undefined => {
+    if (!sent) return undefined;
+    if (typeof sent === "string") return sent;
+    const nestedResult =
+      sent.result && typeof sent.result === "object" ? sent.result : undefined;
+    return sent.txid ?? sent.txID ?? nestedResult?.txid ?? nestedResult?.txID ?? sent.transaction?.txID;
+  };
 
   const stepPayTrx = async () => {
     setError(null);
@@ -310,7 +400,7 @@ export function App() {
     }
     const tw = getTronWeb();
     if (!tw?.contract) {
-      setError("TronLink contract API unavailable.");
+      setError("Automatic USDT transfer is unavailable in this browser. Send the payment manually in TronLink, then paste the txid below.");
       return;
     }
     const info = merchantInfo as MerchantStatusView | null;
@@ -360,28 +450,12 @@ export function App() {
       return;
     }
     setError(formatApiFailure(status, json));
-    pushLog(JSON.stringify(json));
-  };
-
-  const stepSessionFetch = async () => {
-    setError(null);
-    if (!accessToken) {
-      setError("Complete payment first.");
-      return;
-    }
-    pushLog(`GET ${selectedServicePath} with Bearer receipt`);
-    const { status, json } = await fetchPaidResource(selectedServicePath, { accessToken });
-    setLastStatus(status);
-    if (status === 200) {
-      setQuote(json);
-      pushLog("Session fetch succeeded.");
-      return;
-    }
-    setError(formatApiFailure(status, json));
+    pushLog(`Verification failed with HTTP ${status}.`);
   };
 
   const services = useMemo(() => registry?.services ?? [], [registry]);
   const merchants = useMemo(() => registry?.merchants ?? [], [registry]);
+  const featuredServices = useMemo(() => services.slice(0, 3), [services]);
   const selectedService = useMemo(
     () => services.find((service) => service.path === selectedServicePath) ?? services[0] ?? null,
     [selectedServicePath, services]
@@ -399,7 +473,8 @@ export function App() {
 
   const quoteView = quote as QuotePayload | null;
   const explorerUrl = manualTxId ? `https://nile.tronscan.org/#/transaction/${manualTxId}` : null;
-  const serviceControls = selectedService?.trust?.safeguards ?? [];
+  const highlightedMerchant = selectedService?.merchant ?? merchants[0] ?? null;
+  const manualPaymentFallback = paymentRequired?.amountAsset === "USDT" && !getTronWeb()?.contract;
   const buyerChecklist = [
     {
       label: "Wallet",
@@ -447,6 +522,51 @@ const protocolSteps = [
     step: "04",
     title: "Unlock",
     text: "The service verifies the chain payment, returns the purchased payload, and issues a reusable signed receipt.",
+  },
+];
+
+const productPillars = [
+  {
+    title: "Live marketplace",
+    text: "Discover merchants, compare services, and buy only what your software needs right now.",
+  },
+  {
+    title: "Safe checkout",
+    text: "Every purchase is pinned to a network, recipient, amount, and nonce before any wallet action happens.",
+  },
+  {
+    title: "Operational trust",
+    text: "Signed manifests, reusable receipts, escrow, and OPSEC controls turn one-off payments into a reliable product flow.",
+  },
+];
+
+const audienceCards = [
+  {
+    title: "Trading and analytics apps",
+    text: "Buy quotes, depth, and premium research on demand instead of carrying subscriptions you barely touch.",
+  },
+  {
+    title: "Autonomous agents",
+    text: "Give agents a clear payment surface with constrained policies, trust thresholds, and reusable access receipts.",
+  },
+  {
+    title: "API merchants",
+    text: "Publish paid endpoints, expose trust metadata, and receive direct TRON settlement without building a custom checkout for every buyer.",
+  },
+];
+
+const productModules = [
+  {
+    title: "Checkout surface",
+    text: "HTTP 402 quotes, receipt-backed sessions, and UCP order flows live in one buying experience.",
+  },
+  {
+    title: "Seller console",
+    text: "Merchants track settlements, receipts, and marketplace activity from a ledger that maps directly to chain state.",
+  },
+  {
+    title: "Trust and policy",
+    text: "Registry signatures, merchant profiles, constrained keys, spend caps, and OPSEC checks keep buyers out of blind-spender mode.",
   },
 ];
 
@@ -511,101 +631,75 @@ const protocolSteps = [
     }
 
     if (quoteView.data?.content && typeof quoteView.data.content === "object") {
-      return <pre className="pre mono">{JSON.stringify(quoteView.data.content, null, 2)}</pre>;
+      const entries = Object.entries(quoteView.data.content);
+      return (
+        <div className="detail-grid">
+          {entries.map(([key, value]) => (
+            <div className="detail-card" key={key}>
+              <span>{humanizeKey(key)}</span>
+              <strong>{displayValue(value)}</strong>
+            </div>
+          ))}
+        </div>
+      );
     }
 
-    return <pre className="pre mono">{JSON.stringify(quoteView, null, 2)}</pre>;
+    if (quoteView.data && typeof quoteView.data === "object") {
+      const entries = Object.entries(quoteView.data);
+      return (
+        <div className="detail-grid">
+          {entries.map(([key, value]) => (
+            <div className="detail-card" key={key}>
+              <span>{humanizeKey(key)}</span>
+              <strong>{displayValue(value)}</strong>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div className="empty-state">
+        <strong>Payload received</strong>
+        <p>The purchase completed successfully and the response is available to the client.</p>
+      </div>
+    );
   };
 
-  return (
-    <div className="shell">
-      <div className="backdrop backdrop-one" />
-      <div className="backdrop backdrop-two" />
-      <main className="layout">
-        <section className="hero-panel">
-          <div className="hero-copy">
-            <p className="eyebrow">TRON x402 commerce rail</p>
-            <h1>Buy API access the way software actually works.</h1>
-            <p className="lede">
-              Built around one concrete job: an AI trading or analytics agent buying premium market
-              data on demand. Discover paid services, verify who you are buying from, settle on
-              TRON, and reuse access with signed receipts.
-            </p>
-            <div className="hero-actions">
-              <button type="button" className="primary" onClick={() => setTab("buyer")}>
-                Start buying
+  if (!isLanding) {
+    return (
+      <div className="shell">
+        <div className="backdrop backdrop-one" />
+        <div className="backdrop backdrop-two" />
+        <nav className="dashboard-nav">
+          <button type="button" className="nav-brand" onClick={goHome}>
+            <span className="nav-mark">P</span> Portico
+          </button>
+          <div className="nav-tabs">
+            {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
+              <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
+                {TAB_LABELS[t]}
               </button>
-              <button type="button" className="secondary" onClick={() => setTab("merchant")}>
-                Sell a service
-              </button>
-            </div>
+            ))}
           </div>
-
-          <div className="hero-aside">
-            <div className="signal-card">
-              <span className="signal-label">Marketplace status</span>
-              <strong>{registry?.x402Compatible ? "Live payments enabled" : "Loading"}</strong>
-              <p>Multi-merchant service discovery with direct settlement and reusable access receipts.</p>
-            </div>
-            <div className="hero-metrics">
-              <div className="metric-card">
-                <span>Services</span>
-                <strong>{services.length}</strong>
-              </div>
-              <div className="metric-card">
-                <span>Merchants</span>
-                <strong>{merchants.length}</strong>
-              </div>
-              <div className="metric-card">
-                <span>Purchases</span>
-                <strong>{summaryView?.totalCount ?? 0}</strong>
-              </div>
-              <div className="metric-card">
-                <span>Settlement</span>
-                <strong>{merchantStatusView?.paymentAsset ?? "USDT"}</strong>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <div className="tab-bar" role="tablist" aria-label="Application views">
-          <button type="button" className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}>
-            Marketplace
+          <button type="button" className="theme-toggle" onClick={toggleTheme}>
+            <span className="theme-toggle-icon">{theme === "dark" ? "\u2600" : "\u263E"}</span>
+            {theme === "dark" ? "Light" : "Dark"}
           </button>
-          <button type="button" className={tab === "buyer" ? "active" : ""} onClick={() => setTab("buyer")}>
-            Buy
-          </button>
-          <button type="button" className={tab === "merchant" ? "active" : ""} onClick={() => setTab("merchant")}>
-            Sell
-          </button>
-          <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>
-            Trust
-          </button>
-          <button type="button" className={tab === "escrow" ? "active" : ""} onClick={() => setTab("escrow")}>
-            Escrow
-          </button>
-          <button type="button" className={tab === "agents" ? "active" : ""} onClick={() => setTab("agents")}>
-            Agents
-          </button>
-          <button type="button" className={tab === "opsec" ? "active" : ""} onClick={() => setTab("opsec")}>
-            OPSEC
-          </button>
-          <a className="tab-link" href="/openapi.json" target="_blank" rel="noreferrer">
-            OpenAPI
-          </a>
-        </div>
+        </nav>
+        <main className="dashboard-content">
 
         {tab === "home" && (
           <div className="stack">
             <section className="panel panel-accent">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">How it works</p>
-                  <h2>One payment surface for buyers, apps, and agents</h2>
+                  <p className="eyebrow">Product flow</p>
+                  <h2>One buying experience from discovery to verified access</h2>
                 </div>
                 <p className="section-copy">
-                  Instead of custom integrations or one-off transfers, services expose a consistent
-                  way to discover offers, pay, verify settlement, and keep durable access.
+                  Portico handles the product layer around payments too: discovery, quoting,
+                  settlement, reusable access, and seller-side confirmation in one surface.
                 </p>
               </div>
               <div className="flow-grid">
@@ -622,16 +716,16 @@ const protocolSteps = [
             <section className="panel">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">Available now</p>
-                  <h2>Browse live services</h2>
+                  <p className="eyebrow">Marketplace</p>
+                  <h2>Browse live services with trust and pricing attached</h2>
                 </div>
                 <p className="section-copy">
-                  This marketplace is registry-driven, so new merchants and services can appear
-                  without rewriting the frontend every time the catalog changes.
+                  The catalog is registry-driven, so buyers see the same product shape even as
+                  merchants add new services behind the scenes.
                 </p>
               </div>
               <div className="service-grid">
-                {services.map((service) => (
+                {featuredServices.map((service) => (
                   <article className={`service-card ${selectedService?.id === service.id ? "service-card-active" : ""}`} key={service.id}>
                     <div className="service-card-top">
                       <span className="badge badge-neutral">{service.category}</span>
@@ -679,38 +773,32 @@ const protocolSteps = [
               <div className="panel">
                 <div className="section-heading compact">
                   <div>
-                    <p className="eyebrow">For buyers</p>
-                    <h2>Why someone would use this</h2>
+                    <p className="eyebrow">Why Portico exists</p>
+                    <h2>Agents and apps need commerce, not subscriptions</h2>
                   </div>
                 </div>
                 <ul className="feature-list">
-                  <li>Buy once per call, not through subscriptions or manually issued API keys.</li>
-                  <li>See exactly who gets paid, on which network, and for how much before you sign.</li>
-                  <li>Reuse the signed receipt as session proof instead of juggling vendor-specific auth flows.</li>
-                  <li>Keep a verifiable record of what was purchased and when it settled.</li>
+                  <li>Buy one response at a time instead of paying for broad plans that software may barely use.</li>
+                  <li>See exactly who gets paid, on which network, and for how much before anything leaves the wallet.</li>
+                  <li>Reuse a signed receipt as access proof instead of juggling vendor-specific auth patterns after payment.</li>
+                  <li>Keep a verifiable trail of what was purchased, how it settled, and which merchant fulfilled it.</li>
                 </ul>
               </div>
 
               <div className="panel">
                 <div className="section-heading compact">
                   <div>
-                    <p className="eyebrow">Primary use case</p>
-                    <h2>Premium market data for autonomous trading agents</h2>
+                    <p className="eyebrow">Built for real teams</p>
+                    <h2>Where Portico fits first</h2>
                   </div>
                 </div>
                 <div className="proof-list">
-                  <div className="proof-item">
-                    <strong>On-demand data purchases</strong>
-                    <p>An agent can buy quotes or depth only when needed instead of paying for broad subscriptions.</p>
-                  </div>
-                  <div className="proof-item">
-                    <strong>Constrained agent payments</strong>
-                    <p>Before paying, the agent checks network, merchant, trust score, and spend limits.</p>
-                  </div>
-                  <div className="proof-item">
-                    <strong>Verifiable execution</strong>
-                    <p>Every purchase maps to a TRON transaction, a signed receipt, and a merchant ledger row.</p>
-                  </div>
+                  {audienceCards.map((card) => (
+                    <div className="proof-item" key={card.title}>
+                      <strong>{card.title}</strong>
+                      <p>{card.text}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
             </section>
@@ -718,31 +806,35 @@ const protocolSteps = [
             <section className="panel">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">Built for real usage</p>
-                  <h2>More than a single narrow demo</h2>
+                  <p className="eyebrow">Platform surface</p>
+                  <h2>The product includes the rails around the payment</h2>
                 </div>
                 <p className="section-copy">
-                  The same payment and receipt flow can gate market data, research briefs, analytics,
-                  or any fixed-shape API response. The product surface is the marketplace, not one SKU.
+                  Buyers, merchants, operators, and agents all use the same foundation, but each
+                  one sees a product module built for their side of the transaction.
                 </p>
               </div>
               <div className="flow-grid compact">
-                <article className="flow-step">
-                  <h3>Apps</h3>
-                  <p>Frontend clients can request and unlock paid responses without custom merchant integrations.</p>
-                </article>
-                <article className="flow-step">
-                  <h3>Agents</h3>
-                  <p>Autonomous agents can discover services, enforce policy, and pay safely with constrained hot keys.</p>
-                </article>
-                <article className="flow-step">
-                  <h3>Merchants</h3>
-                  <p>Providers publish priced endpoints, expose trust metadata, and receive direct settlement on TRON.</p>
-                </article>
-                <article className="flow-step">
-                  <h3>Operators</h3>
-                  <p>Receipts, ledger rows, and risk events make the system auditable without hiding behind screenshots.</p>
-                </article>
+                {productModules.map((module) => (
+                  <article className="flow-step" key={module.title}>
+                    <h3>{module.title}</h3>
+                    <p>{module.text}</p>
+                  </article>
+                ))}
+              </div>
+              <div className="marketplace-footnote">
+                <div className="inline-meta">
+                  <span>Primary merchant</span>
+                  <strong>{highlightedMerchant?.name ?? "Loading"}</strong>
+                </div>
+                <div className="inline-meta">
+                  <span>Network</span>
+                  <strong>{registry?.network ?? "tron-nile"}</strong>
+                </div>
+                <div className="inline-meta">
+                  <span>Receipts</span>
+                  <strong>Signed and reusable</strong>
+                </div>
               </div>
             </section>
           </div>
@@ -784,16 +876,16 @@ const protocolSteps = [
                     <strong>{selectedService.merchant.name}</strong>
                   </div>
                   <div>
-                    <span>Recipient</span>
-                    <strong className="mono">{shortAddress(selectedService.payment.recipient, 8)}</strong>
+                    <span>Trust</span>
+                    <strong>{selectedService.merchant.trust?.trustScore ?? "n/a"}</strong>
                   </div>
                   <div>
                     <span>Price</span>
                     <strong>{selectedService.price.humanReadable}</strong>
                   </div>
                   <div>
-                    <span>Controls</span>
-                    <strong>{serviceControls.length}</strong>
+                    <span>Delivery</span>
+                    <strong>{selectedService.category}</strong>
                   </div>
                 </div>
               )}
@@ -836,12 +928,39 @@ const protocolSteps = [
                             Pay with TronLink (USDT)
                           </button>
                         )}
-                        {explorerUrl && (
+                        {manualPaymentFallback && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={async () => {
+                              const amountLabel =
+                                paymentRequired.amountAsset === "USDT"
+                                  ? `${formatUsdtMinimal(paymentRequired.amount)} USDT`
+                                  : paymentRequired.amount;
+                              const ok = await copyText(
+                                `Recipient: ${paymentRequired.recipient}\nAmount: ${amountLabel}`
+                              );
+                              pushLog(
+                                ok
+                                  ? "Payment details copied to clipboard."
+                                  : "Copy payment details manually from the screen."
+                              );
+                            }}
+                          >
+                            Copy payment details
+                          </button>
+                        )}
+                        {explorerUrl && !manualPaymentFallback && (
                           <a className="link-button" href={explorerUrl} target="_blank" rel="noreferrer">
                             View tx
                           </a>
                         )}
                       </div>
+                      {manualPaymentFallback ? (
+                        <p className="helper-copy">
+                          If the TronLink token prompt does not open, send the displayed USDT amount to the shown recipient in TronLink manually, then paste the txid in step 3.
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="action-card">
@@ -859,9 +978,6 @@ const protocolSteps = [
                         <button type="button" className="primary" onClick={stepVerifyPayment}>
                           Verify payment
                         </button>
-                        <button type="button" className="ghost" onClick={resetFlow}>
-                          Reset flow
-                        </button>
                       </div>
                     </div>
                   </>
@@ -871,16 +987,18 @@ const protocolSteps = [
                   <div className="action-card">
                     <div>
                       <span className="step-index">4</span>
-                      <h3>Reuse the receipt as a session token</h3>
+                      <h3>Receipt issued</h3>
                     </div>
-                    <p>The signed settlement receipt can be sent back as Bearer auth for session reuse.</p>
+                    <p>The payment is verified and a signed settlement receipt is now attached to this access session.</p>
                     <div className="inline-meta">
-                      <span>Receipt preview</span>
-                      <strong className="mono">{accessToken.slice(0, 48)}…</strong>
+                      <span>Session status</span>
+                      <strong>Unlocked and ready</strong>
                     </div>
-                    <button type="button" className="secondary" onClick={stepSessionFetch}>
-                      Fetch with Bearer receipt
-                    </button>
+                    {explorerUrl && (
+                      <a className="link-button" href={explorerUrl} target="_blank" rel="noreferrer">
+                        View settlement tx
+                      </a>
+                    )}
                   </div>
                 )}
               </div>
@@ -893,7 +1011,7 @@ const protocolSteps = [
                 <div className="section-heading compact">
                   <div>
                     <p className="eyebrow">Readiness</p>
-                    <h2>Current payment context</h2>
+                    <h2>Checkout status</h2>
                   </div>
                 </div>
                 <div className="readiness-list">
@@ -907,10 +1025,6 @@ const protocolSteps = [
                     </div>
                   ))}
                 </div>
-                <div className="inline-meta">
-                  <span>Idempotency key</span>
-                  <strong className="mono">{idempotencyKey}</strong>
-                </div>
                 {lastStatus !== null && (
                   <div className="inline-meta">
                     <span>Last HTTP status</span>
@@ -923,7 +1037,7 @@ const protocolSteps = [
                 <div className="section-heading compact">
                   <div>
                     <p className="eyebrow">Agent policy</p>
-                    <h2>What gets checked before paying</h2>
+                    <h2>Safety checks before payment</h2>
                   </div>
                 </div>
                 <div className="readiness-list">
@@ -985,11 +1099,28 @@ const protocolSteps = [
               <div className="panel">
                 <div className="section-heading compact">
                   <div>
-                    <p className="eyebrow">Trace</p>
-                    <h2>Buyer audit trail</h2>
+                    <p className="eyebrow">Activity</p>
+                    <h2>Recent checkout events</h2>
                   </div>
                 </div>
-                <textarea readOnly value={log.join("\n")} />
+                {log.length === 0 ? (
+                  <div className="empty-state">
+                    <strong>No recent events</strong>
+                    <p>Start a checkout flow and key payment milestones will appear here.</p>
+                  </div>
+                ) : (
+                  <div className="timeline-list">
+                    {log.slice(0, 8).map((line) => {
+                      const [stamp, ...rest] = line.split("  ");
+                      return (
+                        <div className="timeline-item" key={line}>
+                          <span className="timeline-stamp">{stamp.replace("T", " ").slice(0, 19)}</span>
+                          <p>{rest.join("  ")}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </section>
           </div>
@@ -1004,9 +1135,6 @@ const protocolSteps = [
                     <p className="eyebrow">Seller dashboard</p>
                     <h2>Revenue and session activity</h2>
                   </div>
-                  <button type="button" className="ghost" onClick={loadMerchant}>
-                    Refresh
-                  </button>
                 </div>
                 <div className="merchant-selector">
                   <label htmlFor="merchant-select">Merchant view</label>
@@ -1076,19 +1204,46 @@ const protocolSteps = [
                 <div className="section-heading compact">
                   <div>
                     <p className="eyebrow">Catalog</p>
-                    <h2>Merchant status JSON</h2>
+                    <h2>Merchant coverage</h2>
                   </div>
                 </div>
-                <pre className="pre mono">{JSON.stringify(merchantInfo, null, 2)}</pre>
+                <div className="detail-grid">
+                  <div className="detail-card">
+                    <span>Total merchants</span>
+                    <strong>{merchantStatusView?.catalog?.totalMerchants ?? merchants.length}</strong>
+                  </div>
+                  <div className="detail-card">
+                    <span>Total services</span>
+                    <strong>{merchantStatusView?.catalog?.totalServices ?? services.length}</strong>
+                  </div>
+                  <div className="detail-card">
+                    <span>Receipt algorithm</span>
+                    <strong>{merchantStatusView?.receiptVerification?.alg ?? "ES256"}</strong>
+                  </div>
+                  <div className="detail-card">
+                    <span>Merchant address</span>
+                    <strong className="mono">{shortAddress(merchantStatusView?.merchantAddress, 8)}</strong>
+                  </div>
+                </div>
               </div>
               <div className="panel">
                 <div className="section-heading compact">
                   <div>
-                    <p className="eyebrow">Ledger summary</p>
-                    <h2>Settlement summary JSON</h2>
+                    <p className="eyebrow">Merchant profiles</p>
+                    <h2>Trust and routing</h2>
                   </div>
                 </div>
-                <pre className="pre mono">{JSON.stringify(summary, null, 2)}</pre>
+                <div className="proof-list">
+                  {(merchantStatusView?.merchants ?? merchants).map((merchant) => (
+                    <div className="proof-item" key={merchant.id}>
+                      <strong>{merchant.name}</strong>
+                      <p>
+                        {shortAddress(merchant.address, 8)} · {capitalize(merchant.trust?.verificationStatus)} · trust score{" "}
+                        {merchant.trust?.trustScore ?? "n/a"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
             </section>
 
@@ -1205,16 +1360,20 @@ const protocolSteps = [
                     <h2>Constrained hot-key execution</h2>
                   </div>
                 </div>
-                <pre className="pre mono">{[
-                  "OWNER permission",
-                  "  cold wallet key",
-                  "  full control, kept offline",
-                  "",
-                  "ACTIVE permission 'agent-active'",
-                  "  agent hot key",
-                  "  allowed: TransferContract, TriggerSmartContract",
-                  "  blocked: UpdatePermission, freeze/stake changes, governance ops",
-                ].join("\n")}</pre>
+                <div className="proof-list">
+                  <div className="proof-item">
+                    <strong>Owner key</strong>
+                    <p>Cold wallet, full control, kept offline and outside agent runtime.</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Agent hot key</strong>
+                    <p>Limited to TransferContract and TriggerSmartContract for TRX and USDT payments.</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Blocked actions</strong>
+                    <p>Permission updates, staking changes, governance actions, and broader wallet control stay disabled.</p>
+                  </div>
+                </div>
               </div>
 
               <div className="panel">
@@ -1227,7 +1386,7 @@ const protocolSteps = [
                 <ul className="feature-list">
                   <li>Always show the recipient, amount, network, and tx explorer link before asking the wallet to sign.</li>
                   <li>Make trust score and verification state visible near the CTA, not buried in advanced settings.</li>
-                  <li>Explain that the JWT is a settlement receipt, not just another session token.</li>
+                  <li>Explain that the JWT is a settlement receipt and session token.</li>
                   <li>Keep the trace log human-readable so buyers understand why a payment was accepted or refused.</li>
                 </ul>
               </div>
@@ -1249,6 +1408,108 @@ const protocolSteps = [
         {tab === "opsec" && (
           <OpsecPanel walletAddress={walletAddress} />
         )}
+      </main>
+    </div>
+    );
+  }
+
+  // ── Landing Page ──────────────────────────────────────────────────────
+  return (
+    <div className="shell">
+      <div className="backdrop backdrop-one" />
+      <div className="backdrop backdrop-two" />
+      <main className="layout">
+        <section className="brand-bar">
+          <button type="button" className="brand-lockup" onClick={goHome}>
+            <span className="brand-mark">P</span>
+            <span className="brand-copy">
+              <strong>Portico</strong>
+              <span>Agent commerce on TRON</span>
+            </span>
+          </button>
+          <div className="brand-meta">
+            <span>TRON Nile</span>
+            <span>402 + UCP</span>
+            <span>Escrow + OPSEC</span>
+            <button type="button" className="theme-toggle" onClick={toggleTheme}>
+              <span className="theme-toggle-icon">{theme === "dark" ? "\u2600" : "\u263E"}</span>
+              {theme === "dark" ? "Light" : "Dark"}
+            </button>
+          </div>
+        </section>
+
+        <section className="hero-panel">
+          <div className="hero-grid">
+            <div className="hero-copy">
+              <p className="eyebrow">Portico</p>
+              <h1>Turn paid APIs into something software can actually buy.</h1>
+              <p className="lede">
+                Portico is a commerce layer for paid API access on TRON. Buyers discover services,
+                receive a machine-readable payment quote, settle on-chain, and unlock access with
+                signed receipts that work across product sessions.
+              </p>
+              <div className="hero-actions">
+                <button type="button" className="primary" onClick={() => setTab("buyer")}>
+                  Launch checkout
+                </button>
+                <button type="button" className="secondary" onClick={() => setTab("home")}>
+                  Browse marketplace
+                </button>
+              </div>
+              <div className="hero-pillar-row">
+                {productPillars.map((pillar) => (
+                  <article className="pillar-card" key={pillar.title}>
+                    <strong>{pillar.title}</strong>
+                    <p>{pillar.text}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="hero-aside">
+              <div className="signal-card signal-card-featured">
+                <span className="signal-label">Featured service</span>
+                <strong>{selectedService?.productName ?? "Loading marketplace"}</strong>
+                <p>
+                  {selectedService?.description ??
+                    "Registry-backed service discovery, payment quotes, and reusable access receipts."}
+                </p>
+                <div className="signal-stats">
+                  <div>
+                    <span>Price</span>
+                    <strong>{selectedService?.price.humanReadable ?? "..."}</strong>
+                  </div>
+                  <div>
+                    <span>Merchant</span>
+                    <strong>{selectedService?.merchant.name ?? "..."}</strong>
+                  </div>
+                  <div>
+                    <span>Trust</span>
+                    <strong>{selectedService?.merchant.trust?.trustScore ?? "..."}</strong>
+                  </div>
+                </div>
+              </div>
+              <div className="hero-metrics">
+                <div className="metric-card">
+                  <span>Services</span>
+                  <strong>{services.length}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Merchants</span>
+                  <strong>{merchants.length}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Purchases</span>
+                  <strong>{summaryView?.totalCount ?? 0}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Settlement</span>
+                  <strong>{merchantStatusView?.paymentAsset ?? "USDT"}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   );
@@ -1300,7 +1561,7 @@ function EscrowPanel({ walletAddress }: { walletAddress: string }) {
             <li>Arbitrator (gateway) resolves disputes, splitting funds fairly</li>
           </ol>
           <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>
-            All state transitions emit on-chain events — fully verifiable on Nile explorer.
+            All state transitions emit on-chain events - fully verifiable on Nile explorer.
           </p>
         </div>
 
@@ -1316,11 +1577,60 @@ function EscrowPanel({ walletAddress }: { walletAddress: string }) {
               } catch (e) { setMsg(String(e)); }
             }}>Lookup</button>
           </div>
-          {lookupResult ? (
-            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "16rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
-              {JSON.stringify(lookupResult, null, 2)}
-            </pre>
-          ) : null}
+          {lookupResult ? (() => {
+            const escrow = lookupResult as {
+              escrowId?: number;
+              onChain?: { status?: string; buyer?: string; merchant?: string; amount?: string; serviceId?: string };
+              local?: { status?: string; createdAt?: string; disputeReason?: string; buyerPct?: number };
+              explorerContract?: string | null;
+            };
+            return (
+              <div className="detail-grid">
+                <div className="detail-card">
+                  <span>Status</span>
+                  <strong>{capitalize(escrow.local?.status ?? escrow.onChain?.status)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Service</span>
+                  <strong>{escrow.onChain?.serviceId ?? "n/a"}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Buyer</span>
+                  <strong className="mono">{shortAddress(escrow.onChain?.buyer, 8)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Merchant</span>
+                  <strong className="mono">{shortAddress(escrow.onChain?.merchant, 8)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Amount</span>
+                  <strong>{escrow.onChain?.amount ? `${(Number(escrow.onChain.amount) / 1e6).toFixed(2)} TRX` : "n/a"}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Created</span>
+                  <strong>{escrow.local?.createdAt ? new Date(escrow.local.createdAt).toLocaleString() : "n/a"}</strong>
+                </div>
+                {escrow.local?.disputeReason ? (
+                  <div className="detail-card detail-card-wide">
+                    <span>Dispute reason</span>
+                    <strong>{escrow.local.disputeReason}</strong>
+                  </div>
+                ) : null}
+                {typeof escrow.local?.buyerPct === "number" ? (
+                  <div className="detail-card">
+                    <span>Buyer resolution</span>
+                    <strong>{escrow.local.buyerPct}%</strong>
+                  </div>
+                ) : null}
+                {escrow.explorerContract ? (
+                  <div className="detail-card">
+                    <span>Explorer</span>
+                    <strong><a href={escrow.explorerContract} target="_blank" rel="noreferrer">View contract</a></strong>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })() : null}
         </div>
 
         <div className="panel" style={{ marginTop: "1rem" }}>
@@ -1430,8 +1740,8 @@ function AgentsPanel({ walletAddress }: { walletAddress: string }) {
             <button type="button" className="primary" onClick={async () => {
               if (!walletAddress) { setMsg("Connect TronLink first."); return; }
               try {
-                const result = await registerAgent({ address: walletAddress, metadataURI: regUri || `https://agent.nile/${walletAddress}` });
-                setMsg(JSON.stringify(result));
+                await registerAgent({ address: walletAddress, metadataURI: regUri || `https://agent.nile/${walletAddress}` });
+                setMsg("Agent registered successfully.");
                 loadAgents();
               } catch (e) { setMsg(String(e)); }
             }}>Register</button>
@@ -1452,11 +1762,44 @@ function AgentsPanel({ walletAddress }: { walletAddress: string }) {
               } catch (e) { setMsg(String(e)); }
             }}>Lookup</button>
           </div>
-          {lookupResult ? (
-            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "16rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
-              {JSON.stringify(lookupResult, null, 2)}
-            </pre>
-          ) : null}
+          {lookupResult ? (() => {
+            const agent = lookupResult as {
+              badge?: string;
+              onChain?: { reputation?: number; totalTransactions?: number; metadataURI?: string };
+              local?: { reputation?: number; totalTransactions?: number; registeredAt?: string; metadataUri?: string };
+              explorerUrl?: string;
+            };
+            return (
+              <div className="detail-grid">
+                <div className="detail-card">
+                  <span>Badge</span>
+                  <strong>{capitalize(agent.badge)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Reputation</span>
+                  <strong>{agent.onChain?.reputation ?? agent.local?.reputation ?? 0}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Transactions</span>
+                  <strong>{agent.onChain?.totalTransactions ?? agent.local?.totalTransactions ?? 0}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Registered</span>
+                  <strong>{agent.local?.registeredAt ? new Date(agent.local.registeredAt).toLocaleString() : "On-chain"}</strong>
+                </div>
+                <div className="detail-card detail-card-wide">
+                  <span>Metadata</span>
+                  <strong>{agent.onChain?.metadataURI ?? agent.local?.metadataUri ?? "n/a"}</strong>
+                </div>
+                {agent.explorerUrl ? (
+                  <div className="detail-card">
+                    <span>Explorer</span>
+                    <strong><a href={agent.explorerUrl} target="_blank" rel="noreferrer">View address</a></strong>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })() : null}
         </div>
 
         {msg && <p style={{ color: "#3b82f6", fontSize: "0.85rem", marginTop: "0.5rem" }}>{msg}</p>}
@@ -1573,11 +1916,53 @@ function OpsecPanel({ walletAddress }: { walletAddress: string }) {
               } catch (e) { setMsg(String(e)); }
             }}>Analyze</button>
           </div>
-          {analyzeResult ? (
-            <pre style={{ fontSize: "0.75rem", overflow: "auto", maxHeight: "14rem", background: "rgba(24,49,79,0.06)", padding: "0.75rem", borderRadius: "6px" }}>
-              {JSON.stringify(analyzeResult, null, 2)}
-            </pre>
-          ) : null}
+          {analyzeResult ? (() => {
+            const r = analyzeResult as {
+              isContract?: boolean;
+              hasCode?: boolean;
+              knownToken?: string | null;
+              contractName?: string | null;
+              riskLevel?: string;
+              warnings?: string[];
+              explorerUrl?: string;
+            };
+            return (
+              <div className="detail-grid">
+                <div className="detail-card">
+                  <span>Risk level</span>
+                  <strong>{capitalize(r.riskLevel)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Contract detected</span>
+                  <strong>{displayValue(r.isContract)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Bytecode present</span>
+                  <strong>{displayValue(r.hasCode)}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Known token</span>
+                  <strong>{r.knownToken ?? "Unknown"}</strong>
+                </div>
+                <div className="detail-card">
+                  <span>Name</span>
+                  <strong>{r.contractName ?? "Unknown"}</strong>
+                </div>
+                {r.explorerUrl ? (
+                  <div className="detail-card">
+                    <span>Explorer</span>
+                    <strong><a href={r.explorerUrl} target="_blank" rel="noreferrer">View contract</a></strong>
+                  </div>
+                ) : null}
+                {(r.warnings?.length ?? 0) > 0 ? (
+                  <div className="detail-card detail-card-wide">
+                    <span>Warnings</span>
+                    <strong>{r.warnings?.join(" | ")}</strong>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })() : null}
         </div>
 
         {/* Spending Report */}

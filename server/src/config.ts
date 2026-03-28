@@ -80,7 +80,7 @@ export function assertMerchantConfigured(): void {
  * Returns true if auth passes, false otherwise. When adminApiKey is empty (dev mode), always passes.
  */
 export function checkAdminAuth(authHeader: string | undefined): boolean {
-  if (!config.adminApiKey) return true; // dev mode — no auth required
+  if (!config.adminApiKey) return true;
   return authHeader === `Bearer ${config.adminApiKey}`;
 }
 

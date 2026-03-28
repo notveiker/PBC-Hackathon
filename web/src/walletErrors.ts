@@ -11,7 +11,7 @@ export function friendlyWalletError(e: unknown): string {
     return "Not enough Bandwidth: wait for daily free bandwidth or freeze TRX on Nile.";
   }
   if (/invalid.*address|checksum/i.test(s)) {
-    return "Invalid address — copy the merchant Base58 from the 402 body.";
+    return "Invalid address - copy the merchant Base58 from the 402 body.";
   }
   return s.length > 220 ? `${s.slice(0, 220)}…` : s;
 }

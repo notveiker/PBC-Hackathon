@@ -1,14 +1,19 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type Database from "better-sqlite3";
 import { config } from "./config.js";
 import {
   createPendingPayment,
+  getUcpOrder,
   getPendingPayment,
   insertSettlement,
+  insertUcpOrder,
   insertRiskEvent,
   isTxConsumed,
+  listPendingPayments,
   listRiskEvents,
+  markUcpOrderSettled,
   pendingPaymentSummary,
   removePendingPayment,
   type SettlementRow,
@@ -107,6 +112,119 @@ async function fetchDepth(): Promise<DepthData> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+async function getTxTimestampMs(tronWeb: TronWebInstance, txId: string): Promise<number | null> {
+  try {
+    const tx = await tronWeb.trx.getTransaction(txId);
+    const raw = tx as { raw_data?: { timestamp?: number } };
+    return typeof raw.raw_data?.timestamp === "number" ? raw.raw_data.timestamp : null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingResourcePath(pending: PendingPayment): string | null {
+  const key = pending.idempotencyKey;
+  if (!key) return null;
+  const [resource] = key.split("::");
+  return resource?.startsWith("/v1/") ? resource : null;
+}
+
+async function reconcileSettledPaymentTx(args: {
+  db: Database.Database;
+  tronWeb: TronWebInstance;
+  txId: string;
+}) {
+  const { db, tronWeb, txId } = args;
+  const pendingPayments = listPendingPayments(db, 100);
+  const txTimestamp = await getTxTimestampMs(tronWeb, txId);
+  const matches: Array<{
+    pending: PendingPayment;
+    verified: { ok: true; fromBase58: string; blockNumber: number };
+    resourcePath: string;
+  }> = [];
+
+  for (const pending of pendingPayments) {
+    const resourcePath = pendingResourcePath(pending);
+    if (!resourcePath) continue;
+    const verified =
+      pending.asset === "USDT"
+        ? await verifyTrc20Payment({ tronWeb }, txId, pending, config.minConfirmations)
+        : await verifyTrxPayment({ tronWeb }, txId, pending, config.minConfirmations);
+    if (verified.ok) {
+      matches.push({ pending, verified, resourcePath });
+    }
+  }
+
+  if (matches.length === 0) {
+    return { ok: false as const, reason: "No pending payment matched this transaction." };
+  }
+
+  const candidates =
+    txTimestamp !== null
+      ? matches.filter((match) => match.pending.createdAt <= txTimestamp)
+      : matches;
+  const ordered = (candidates.length > 0 ? candidates : matches).sort(
+    (a, b) => b.pending.createdAt - a.pending.createdAt
+  );
+  const chosen = ordered[0];
+  const merchant = getMerchantById(chosen.pending.merchantId);
+  const settlementId = insertSettlement(db, {
+    txId,
+    nonce: chosen.pending.nonce,
+    resource: chosen.resourcePath,
+    merchantId: merchant.id,
+    payer: chosen.verified.fromBase58,
+    merchant: merchant.address,
+    asset: chosen.pending.asset,
+    amountUnits: chosen.pending.amountSun,
+    blockNumber: chosen.verified.blockNumber,
+  });
+  markUcpOrderSettled(db, chosen.pending.nonce, txId, settlementId);
+  removePendingPayment(db, chosen.pending.nonce);
+  insertRiskEvent(db, {
+    actor: "server",
+    action: "allow",
+    severity: "low",
+    servicePath: chosen.resourcePath,
+    merchantId: merchant.id,
+    reason: "payment_reconciled",
+    details: { txId, nonce: chosen.pending.nonce, payer: chosen.verified.fromBase58 },
+  });
+
+  return {
+    ok: true as const,
+    settlementId,
+    nonce: chosen.pending.nonce,
+    merchantId: merchant.id,
+    resource: chosen.resourcePath,
+    payer: chosen.verified.fromBase58,
+  };
+}
+
+async function reconcileRecentVerificationFailures(args: {
+  db: Database.Database;
+  tronWeb: TronWebInstance;
+}) {
+  const { db, tronWeb } = args;
+  const recentFailures = listRiskEvents(db, { limit: 25, actor: "server" }).filter(
+    (row) => row.reason === "payment_verification_failed"
+  );
+
+  for (const failure of recentFailures) {
+    let txId: string | undefined;
+    try {
+      const details = failure.details_json
+        ? (JSON.parse(failure.details_json) as { txId?: string })
+        : undefined;
+      txId = details?.txId;
+    } catch {
+      txId = undefined;
+    }
+    if (!txId || isTxConsumed(db, txId)) continue;
+    await reconcileSettledPaymentTx({ db, tronWeb, txId });
+  }
+}
+
 const PaymentRequiredSchema = z.object({
   x402Version: z.literal(1),
   scheme: z.literal("tron-settlement"),
@@ -155,6 +273,12 @@ const ServiceOnboardingSchema = z.object({
     minVerification: z.enum(["verified", "seeded"]),
   }),
   staticResponse: z.record(z.string(), z.unknown()).optional(),
+});
+
+const UcpCheckoutSchema = z.object({
+  serviceId: z.string().min(2),
+  buyer: z.string().regex(/^T[1-9A-HJ-NP-Za-km-z]{25,40}$/).optional(),
+  quantity: z.number().int().positive().max(25).default(1),
 });
 
 const RESERVED_SERVICE_PATHS = new Set([
@@ -440,7 +564,7 @@ async function handleCommerceGet(
         servicePath: resourcePath,
         merchantId: merchant.id,
         reason: "payment_verification_failed",
-        details: { verificationReason: verified.reason },
+        details: { verificationReason: verified.reason, txId: txHeader, nonce: nonceHeader },
       });
       const { asset, amount } = priceFor(service);
       return reply.code(402).send({
@@ -506,7 +630,7 @@ async function handleCommerceGet(
     });
 
     try {
-      insertSettlement(db, {
+      const settlementId = insertSettlement(db, {
         txId: txHeader,
         nonce: nonceHeader,
         resource: resourcePath,
@@ -517,6 +641,7 @@ async function handleCommerceGet(
         amountUnits: pending.amountSun,
         blockNumber: verified.blockNumber,
       });
+      markUcpOrderSettled(db, nonceHeader, txHeader, settlementId);
     } catch (e) {
       const msg = String(e);
       if (msg.includes("UNIQUE") || msg.includes("unique")) {
@@ -606,6 +731,134 @@ export function registerCommerceRoutes(
   db: Database.Database,
   tronWeb: TronWebInstance
 ): void {
+  app.post("/v1/ucp/checkout", async (req, reply) => {
+    const parsed = UcpCheckoutSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_checkout_payload",
+        issues: parsed.error.flatten(),
+      });
+    }
+
+    const service = getServiceById(parsed.data.serviceId);
+    if (!service) {
+      return reply.code(404).send({
+        error: "unknown_service",
+        message: `No service found for id=${parsed.data.serviceId}`,
+      });
+    }
+
+    const merchant = getMerchantById(service.merchantId);
+    const unitPrice = priceFor(service);
+    const totalAmount = unitPrice.amount * BigInt(parsed.data.quantity);
+    const orderId = randomUUID();
+    const rawIdempotencyKey = `ucp:${orderId}`;
+    const scopedIdempotency = `${service.path}::${rawIdempotencyKey}`;
+    const pending = createPendingPayment(db, {
+      amountSun: totalAmount,
+      recipientBase58: merchant.address,
+      merchantId: merchant.id,
+      asset: unitPrice.asset,
+      contractAddress: unitPrice.asset === "USDT" ? config.usdtContractAddress : undefined,
+      idempotencyKey: scopedIdempotency,
+    });
+
+    insertUcpOrder(db, {
+      orderId,
+      serviceId: service.id,
+      resource: service.path,
+      merchantId: merchant.id,
+      buyer: parsed.data.buyer,
+      quantity: parsed.data.quantity,
+      asset: unitPrice.asset,
+      amountUnits: totalAmount,
+      recipient: merchant.address,
+      nonce: pending.nonce,
+      rawIdempotencyKey,
+    });
+
+    return reply.code(201).send({
+      ok: true,
+      protocol: {
+        family: "ucp",
+        capability: "checkout",
+        version: "0.1-tron",
+      },
+      order: {
+        orderId,
+        serviceId: service.id,
+        quantity: parsed.data.quantity,
+        buyer: parsed.data.buyer ?? null,
+        status: "payment_required",
+      },
+      checkout: {
+        settlement: {
+          scheme: "tron-settlement",
+          network: "tron-nile",
+          recipient: merchant.address,
+          asset: unitPrice.asset,
+          amount: totalAmount.toString(),
+        },
+        paymentRequired: PaymentRequiredSchema.parse(
+          paymentRequiredBody({
+            resource: service.path,
+            amountSun: totalAmount,
+            recipient: merchant.address,
+            nonce: pending.nonce,
+            asset: unitPrice.asset,
+            idempotencyKey: rawIdempotencyKey,
+            productName: service.productName,
+          })
+        ),
+        confirmWith: {
+          method: "GET",
+          resource: service.path,
+          headers: ["Idempotency-Key", "X-Payment-Nonce", "X-Payment-Tx-Id"],
+        },
+      },
+    });
+  });
+
+  app.get("/v1/ucp/orders/:orderId", async (req, reply) => {
+    const params = req.params as { orderId?: string };
+    const order = getUcpOrder(db, params.orderId?.trim() ?? "");
+    if (!order) {
+      return reply.code(404).send({
+        error: "unknown_order",
+        message: `No UCP order found for id=${params.orderId ?? ""}`,
+      });
+    }
+
+    return {
+      ok: true,
+      protocol: {
+        family: "ucp",
+        capability: "order",
+        version: "0.1-tron",
+      },
+      order: {
+        orderId: order.order_id,
+        serviceId: order.service_id,
+        resource: order.resource,
+        merchantId: order.merchant_id,
+        buyer: order.buyer,
+        quantity: order.quantity,
+        status: order.status,
+        settlement: {
+          asset: order.asset,
+          amount: order.amount_units,
+          recipient: order.recipient,
+          nonce: order.nonce,
+          txId: order.payment_tx,
+          settlementId: order.settlement_id,
+        },
+        idempotencyKey: order.raw_idempotency_key,
+        createdAt: new Date(order.created_at).toISOString(),
+        updatedAt: new Date(order.updated_at).toISOString(),
+      },
+    };
+  });
+
   app.get("/v1/agent/premium-quote", async (req, reply) => {
     const service = getServiceByPath("/v1/agent/premium-quote");
     if (!service) throw new Error("Missing service definition for /v1/agent/premium-quote");
@@ -692,14 +945,17 @@ export function registerCommerceRoutes(
       network: "tron-nile",
       paymentScheme: "tron-settlement",
       x402Compatible: true,
+      ucpCompatible: true,
       marketplace: true,
       description:
         "Pay-per-use APIs for AI agents. Multiple merchants can publish priced endpoints; buyers pay the service owner directly on TRON Nile.",
+      protocolCapabilities: ["x402", "ucp-checkout", "ucp-order"],
       howToUse: [
         "1. GET any service path → receive HTTP 402 with paymentRequired (nonce, amount, recipient).",
         "2. Send the listed asset (TRX or USDT) to that service merchant on TRON Nile.",
         "3. Retry GET with headers X-Payment-Nonce and X-Payment-Tx-Id.",
         "4. Receive data + accessToken (JWT receipt). Use Bearer <token> for session re-use.",
+        "5. Or POST /v1/ucp/checkout to create an order object that maps checkout/order semantics onto the same TRON payment flow.",
       ],
       merchants: merchantEntries,
       services,
@@ -831,6 +1087,7 @@ export function registerCommerceRoutes(
   });
 
   app.get("/v1/merchant/summary", async (req) => {
+    await reconcileRecentVerificationFailures({ db, tronWeb });
     const q = req.query as { merchant?: string };
     const merchant = q.merchant?.trim() ? getMerchantById(q.merchant.trim()) : null;
     const s = settlementSummary(db, merchant?.id);
@@ -846,6 +1103,7 @@ export function registerCommerceRoutes(
   });
 
   app.get("/v1/merchant/payments", async (req) => {
+    await reconcileRecentVerificationFailures({ db, tronWeb });
     const q = req.query as { limit?: string; offset?: string; merchant?: string };
     const limit = Math.min(100, Math.max(1, Number(q.limit ?? 20)));
     const offset = Math.max(0, Number(q.offset ?? 0));
@@ -872,6 +1130,46 @@ export function registerCommerceRoutes(
         createdAt: new Date(r.created_at).toISOString(),
         explorer: `https://nile.tronscan.org/#/transaction/${r.tx_id}`,
       })),
+    };
+  });
+
+  app.post("/v1/merchant/reconcile-payment", async (req, reply) => {
+    const parsed = z
+      .object({
+        txId: z.string().trim().regex(/^[0-9a-fA-F]{64}$/),
+      })
+      .safeParse(req.body);
+
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "invalid_reconcile_payload",
+        issues: parsed.error.flatten(),
+      });
+    }
+
+    if (isTxConsumed(db, parsed.data.txId)) {
+      return reply.code(409).send({
+        error: "tx_already_recorded",
+        message: "This transaction is already recorded in the settlement ledger.",
+      });
+    }
+
+    const reconciled = await reconcileSettledPaymentTx({
+      db,
+      tronWeb,
+      txId: parsed.data.txId,
+    });
+
+    if (!reconciled.ok) {
+      return reply.code(404).send({
+        error: "reconcile_failed",
+        message: reconciled.reason,
+      });
+    }
+
+    return {
+      ok: true,
+      reconciled,
     };
   });
 
@@ -967,6 +1265,26 @@ function openapiSpec(): Record<string, unknown> {
           responses: {
             "200": { description: "OK or session" },
             "402": { description: "Payment required" },
+          },
+        },
+      },
+      "/v1/ucp/checkout": {
+        post: {
+          summary: "UCP Checkout capability mapped to TRON settlement",
+          responses: {
+            "201": { description: "Order created with payment requirements" },
+          },
+        },
+      },
+      "/v1/ucp/orders/{orderId}": {
+        get: {
+          summary: "UCP Order capability for checkout status and settlement tracking",
+          parameters: [
+            { name: "orderId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": { description: "Current order status" },
+            "404": { description: "Unknown order" },
           },
         },
       },
