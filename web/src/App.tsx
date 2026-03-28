@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  fetchRegistry,
   fetchMerchantPayments,
   fetchMerchantStatusFor,
   fetchMerchantSummary,
   fetchPaidResource,
+  fetchRegistry,
   type Error402Body,
   type PaymentRequired,
   type RegistryResponse,
-  type RegistryService,
 } from "./api";
 import { friendlyWalletError, getTronNetworkWarning } from "./walletErrors";
 
@@ -32,11 +31,7 @@ type TronWebLike = {
     }>;
   };
   transactionBuilder: {
-    sendTrx: (
-      to: string,
-      amount: number,
-      from: string
-    ) => Promise<Record<string, unknown>>;
+    sendTrx: (to: string, amount: number, from: string) => Promise<Record<string, unknown>>;
   };
   trx: {
     sign: (tx: unknown) => Promise<unknown>;
@@ -44,6 +39,80 @@ type TronWebLike = {
       signed: unknown
     ) => Promise<{ txid?: string; result?: boolean; transaction?: { txID?: string } }>;
   };
+};
+
+type MerchantStatusView = {
+  network?: string;
+  merchantAddress?: string;
+  paymentAsset?: string;
+  usdtContract?: string | null;
+  merchants?: Array<{
+    id: string;
+    name: string;
+    address: string;
+    trust?: {
+      verificationStatus?: string;
+      trustScore?: number;
+      riskTier?: string;
+      controls?: string[];
+    };
+  }>;
+  catalog?: {
+    totalMerchants?: number;
+    totalServices?: number;
+    catalogPaths?: string[];
+  };
+  receiptVerification?: {
+    alg?: string;
+    issuer?: string;
+    audience?: string;
+  };
+};
+
+type SummaryView = {
+  totalCount?: number;
+  since24h?: number;
+  totalUsdtLike?: string;
+  pending?: {
+    totalPending?: number;
+    oldestPendingAgeSec?: number | null;
+  };
+};
+
+type PaymentRow = {
+  txId: string;
+  resource: string;
+  payer: string;
+  asset: string;
+  amountUnits: string;
+  createdAt: string;
+  explorer: string;
+};
+
+type QuotePayload = {
+  quote?: {
+    symbol?: string;
+    bid?: number;
+    ask?: number;
+    spreadBps?: number;
+    bidQty?: number;
+    askQty?: number;
+    ts?: string;
+  };
+  depth?: {
+    bids?: Array<{ px: number; sz: number }>;
+    asks?: Array<{ px: number; sz: number }>;
+    ts?: string;
+  };
+  content?: Record<string, unknown>;
+  settlementReceipt?: unknown;
+  verification?: {
+    settlementTx?: string;
+    payer?: string;
+    blockNumber?: number;
+  };
+  data?: Record<string, unknown>;
+  accessToken?: string;
 };
 
 function getTronWeb(): TronWebLike | null {
@@ -64,12 +133,22 @@ function formatUsdtMinimal(units: string): string {
   return fracStr ? `${whole}.${fracStr}` : `${whole}`;
 }
 
+function shortAddress(value: string | undefined, size = 6): string {
+  if (!value) return "n/a";
+  if (value.length <= size * 2) return value;
+  return `${value.slice(0, size)}…${value.slice(-size)}`;
+}
+
+function capitalize(value: string | undefined): string {
+  if (!value) return "Unknown";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 export function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [selectedServicePath, setSelectedServicePath] = useState("/v1/agent/premium-quote");
-  const [selectedMerchantId, setSelectedMerchantId] = useState<string>("all");
-  const resourcePath = selectedServicePath;
+  const [selectedMerchantId, setSelectedMerchantId] = useState("all");
 
   const [merchantInfo, setMerchantInfo] = useState<unknown>(null);
   const [summary, setSummary] = useState<unknown>(null);
@@ -87,7 +166,7 @@ export function App() {
   const [networkWarning, setNetworkWarning] = useState<string | null>(null);
 
   const pushLog = useCallback((line: string) => {
-    setLog((prev) => [`${new Date().toISOString()}  ${line}`, ...prev].slice(0, 50));
+    setLog((prev) => [`${new Date().toISOString()}  ${line}`, ...prev].slice(0, 60));
   }, []);
 
   useEffect(() => {
@@ -97,8 +176,8 @@ export function App() {
       setNetworkWarning(getTronNetworkWarning(tw as TronWebLike | null));
     };
     tick();
-    const i = window.setInterval(tick, 800);
-    return () => window.clearInterval(i);
+    const interval = window.setInterval(tick, 800);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -112,7 +191,7 @@ export function App() {
       .catch(() => undefined);
     fetchMerchantStatusFor().then(setMerchantInfo).catch(() => undefined);
     fetchMerchantSummary().then(setSummary).catch(() => undefined);
-  }, []);
+  }, [selectedServicePath]);
 
   const loadMerchant = useCallback(() => {
     const merchantId = selectedMerchantId === "all" ? undefined : selectedMerchantId;
@@ -122,23 +201,15 @@ export function App() {
   }, [selectedMerchantId]);
 
   useEffect(() => {
+    if (tab === "merchant") loadMerchant();
     if (tab === "buyer") {
       fetchMerchantStatusFor().then(setMerchantInfo).catch(() => undefined);
     }
-  }, [tab]);
-
-  useEffect(() => {
-    if (tab === "merchant") loadMerchant();
   }, [tab, loadMerchant]);
 
   const formatApiFailure = (status: number, json: unknown): string => {
     const o = json as { message?: string; hint?: string; error?: string };
-    const parts = [
-      `HTTP ${status}`,
-      o.error,
-      o.message,
-      o.hint ? `Hint: ${o.hint}` : null,
-    ].filter(Boolean);
+    const parts = [`HTTP ${status}`, o.error, o.message, o.hint ? `Hint: ${o.hint}` : null].filter(Boolean);
     return parts.join(" — ");
   };
 
@@ -153,15 +224,15 @@ export function App() {
 
   const stepRequest402 = async () => {
     setError(null);
-    pushLog(`GET ${resourcePath} (expect 402)`);
-    const { status, json } = await fetchPaidResource(resourcePath, { idempotencyKey });
+    pushLog(`GET ${selectedServicePath} (expect 402)`);
+    const { status, json } = await fetchPaidResource(selectedServicePath, { idempotencyKey });
     setLastStatus(status);
     if (status === 402) {
       const body = json as Error402Body;
       if (body.paymentRequired) {
         setPaymentRequired(body.paymentRequired);
-        pushLog(`402 — nonce=${body.paymentRequired.nonce}`);
         setQuote(null);
+        pushLog(`402 Payment Required received; nonce=${body.paymentRequired.nonce}`);
         return;
       }
     }
@@ -177,7 +248,7 @@ export function App() {
   const stepPayTrx = async () => {
     setError(null);
     if (!paymentRequired) {
-      setError("Request 402 first.");
+      setError("Request a quote first.");
       return;
     }
     const tw = getTronWeb();
@@ -186,7 +257,7 @@ export function App() {
       return;
     }
     if (paymentRequired.amountAsset !== "TRX") {
-      setError("Current session expects TRX. Use Pay USDT or change PAYMENT_ASSET.");
+      setError("This payment session expects TRX.");
       return;
     }
     const from = tw.defaultAddress?.base58;
@@ -194,38 +265,35 @@ export function App() {
       setError("Unlock TronLink and select an account.");
       return;
     }
-    const amountSun = Number(paymentRequired.amount);
     try {
-      pushLog(`TronLink TRX → ${paymentRequired.recipient} sun=${amountSun}`);
       const tx = await tw.transactionBuilder.sendTrx(
         paymentRequired.recipient,
-        amountSun,
+        Number(paymentRequired.amount),
         from
       );
       const signed = await tw.trx.sign(tx);
       const sent = await tw.trx.sendRawTransaction(signed);
       const txid = broadcastResultTxid(sent);
       if (!txid) {
-        setError("No txid from broadcast — confirm Nile network in TronLink.");
-        pushLog(JSON.stringify(sent));
+        setError("No txid returned from the TRX transfer.");
         return;
       }
       setManualTxId(txid);
-      pushLog(`txid=${txid}`);
-    } catch (e) {
-      setError(friendlyWalletError(e));
-      pushLog(String(e));
+      pushLog(`TRX payment broadcast: ${txid}`);
+    } catch (err) {
+      setError(friendlyWalletError(err));
+      pushLog(String(err));
     }
   };
 
   const stepPayUsdt = async () => {
     setError(null);
     if (!paymentRequired) {
-      setError("Request 402 first.");
+      setError("Request a quote first.");
       return;
     }
     if (paymentRequired.amountAsset !== "USDT") {
-      setError("Current session is not USDT.");
+      setError("This payment session is not a USDT payment.");
       return;
     }
     const tw = getTronWeb();
@@ -233,56 +301,49 @@ export function App() {
       setError("TronLink contract API unavailable.");
       return;
     }
-    const info = merchantInfo as { usdtContract?: string | null } | null;
+    const info = merchantInfo as MerchantStatusView | null;
     const contractAddr = info?.usdtContract;
     if (!contractAddr) {
-      setError("Load Merchant tab once to fetch USDT contract, or check server config.");
-      return;
-    }
-    const from = tw.defaultAddress?.base58;
-    if (!from) {
-      setError("Unlock TronLink and select an account.");
+      setError("USDT contract not loaded from merchant status.");
       return;
     }
     try {
       const inst = await tw.contract().at(contractAddr);
-      pushLog(`TronLink USDT transfer → ${paymentRequired.recipient} units=${paymentRequired.amount}`);
       const sent = await inst.transfer(paymentRequired.recipient, paymentRequired.amount).send({
         feeLimit: 150_000_000,
       });
       const txid = broadcastResultTxid(sent);
       if (!txid) {
-        setError("No txid from USDT transfer.");
-        pushLog(JSON.stringify(sent));
+        setError("No txid returned from the USDT transfer.");
         return;
       }
       setManualTxId(txid);
-      pushLog(`txid=${txid}`);
-    } catch (e) {
-      setError(friendlyWalletError(e));
-      pushLog(String(e));
+      pushLog(`USDT payment broadcast: ${txid}`);
+    } catch (err) {
+      setError(friendlyWalletError(err));
+      pushLog(String(err));
     }
   };
 
   const stepVerifyPayment = async () => {
     setError(null);
     if (!paymentRequired || !manualTxId.trim()) {
-      setError("Need nonce from 402 and a transaction id.");
+      setError("You need both a nonce and a Nile txid.");
       return;
     }
-    pushLog(`Retry GET ${resourcePath} with proof`);
-    const { status, json } = await fetchPaidResource(resourcePath, {
+    pushLog(`Retry GET ${selectedServicePath} with payment proof`);
+    const { status, json } = await fetchPaidResource(selectedServicePath, {
       paymentNonce: paymentRequired.nonce,
       paymentTxId: manualTxId.trim(),
       idempotencyKey,
     });
     setLastStatus(status);
     if (status === 200) {
-      const body = json as { accessToken?: string; settlementReceipt?: unknown };
+      const body = json as { accessToken?: string };
       if (body.accessToken) setAccessToken(body.accessToken);
       setQuote(json);
-      pushLog("200 — verified, JWT settlement receipt issued");
       setPaymentRequired(null);
+      pushLog("Verification passed; settlement receipt issued.");
       loadMerchant();
       return;
     }
@@ -296,656 +357,810 @@ export function App() {
       setError("Complete payment first.");
       return;
     }
-    pushLog(`GET ${resourcePath} with Bearer JWT`);
-    const { status, json } = await fetchPaidResource(resourcePath, { accessToken });
+    pushLog(`GET ${selectedServicePath} with Bearer receipt`);
+    const { status, json } = await fetchPaidResource(selectedServicePath, { accessToken });
     setLastStatus(status);
     if (status === 200) {
       setQuote(json);
-      pushLog("200 — session");
+      pushLog("Session fetch succeeded.");
       return;
     }
     setError(formatApiFailure(status, json));
   };
 
-  const permArchDiagram = [
-    "TRON Account: Merchant / Payer",
-    "",
-    "  OWNER permission  (threshold 1)",
-    "  +- cold wallet key  (weight 1)",
-    "     Can do everything; kept offline",
-    "",
-    "  ACTIVE permission 'agent-active'  (threshold 1)",
-    "  +- agent hot key  (weight 1)",
-    "     Allowed: TransferContract, TriggerSmartContract",
-    "     Blocked: UpdatePermission, FreezeBalance, Vote...",
-  ].join("\n");
-
-  const permCodeSnippet = [
-    "const agentPermission = {",
-    "  type: 2,                        // ACTIVE",
-    "  permission_name: 'agent-active',",
-    "  threshold: 1,",
-    "  // operations bitmask: TransferContract + TriggerSmartContract",
-    "  operations: '02000000800000000000000000000000' +",
-    "              '00000000000000000000000000000000',",
-    "  keys: [{ address: AGENT_ADDRESS, weight: 1 }],",
-    "};",
-    "",
-    "const tx = await tronWeb.transactionBuilder",
-    "  .updateAccountPermissions(",
-    "    OWNER_ADDRESS,",
-    "    ownerPermission,   // unchanged owner",
-    "    null,              // not a Super Representative",
-    "    [agentPermission], // constrained active",
-    "  );",
-    "",
-    "const signed = await tronWeb.trx.sign(tx, OWNER_KEY);",
-    "const result = await tronWeb.trx.sendRawTransaction(signed);",
-    "// agent key is now sandboxed",
-  ].join("\n");
-
-  const explorerUrl = useMemo(() => {
-    if (!manualTxId) return null;
-    return `https://nile.tronscan.org/#/transaction/${manualTxId}`;
-  }, [manualTxId]);
-
-  const paymentRows = useMemo(() => {
-    const p = payments as
-      | { rows?: Array<{ txId: string; resource: string; payer: string; asset: string; amountUnits: string; createdAt: string; explorer: string }> }
-      | undefined;
-    return p?.rows ?? [];
-  }, [payments]);
-
   const services = useMemo(() => registry?.services ?? [], [registry]);
   const merchants = useMemo(() => registry?.merchants ?? [], [registry]);
-  const selectedService = useMemo<RegistryService | null>(
+  const selectedService = useMemo(
     () => services.find((service) => service.path === selectedServicePath) ?? services[0] ?? null,
     [selectedServicePath, services]
   );
 
-  const merchantStatusView = useMemo(() => {
-    return (merchantInfo as
-      | {
-          network?: string;
-          merchantAddress?: string;
-          paymentAsset?: string;
-          usdtContract?: string | null;
-          merchants?: Array<{ id: string; name: string; address: string }>;
-        }
-      | null) ?? null;
-  }, [merchantInfo]);
+  const merchantStatusView = useMemo(
+    () => ((merchantInfo as MerchantStatusView | null) ?? null),
+    [merchantInfo]
+  );
+  const summaryView = useMemo(() => ((summary as SummaryView | null) ?? null), [summary]);
+  const paymentRows = useMemo(() => {
+    const view = payments as { rows?: PaymentRow[] } | undefined;
+    return view?.rows ?? [];
+  }, [payments]);
 
-  const summaryView = useMemo(() => {
-    return (summary as
-      | {
-          totalCount?: number;
-          since24h?: number;
-          totalUsdtLike?: string;
-        }
-      | null) ?? null;
-  }, [summary]);
+  const quoteView = quote as QuotePayload | null;
+  const explorerUrl = manualTxId ? `https://nile.tronscan.org/#/transaction/${manualTxId}` : null;
+  const serviceControls = selectedService?.trust?.safeguards ?? [];
+  const buyerChecklist = [
+    {
+      label: "Wallet",
+      value: tronReady ? "Connected" : "Not detected",
+      tone: tronReady ? "ok" : "warn",
+      detail: networkWarning ?? "TronLink available and ready for Nile testnet.",
+    },
+    {
+      label: "Proof",
+      value: paymentRequired ? "Quote issued" : accessToken ? "Receipt issued" : "Idle",
+      tone: accessToken ? "ok" : paymentRequired ? "warn" : "neutral",
+      detail: paymentRequired
+        ? `Nonce ${shortAddress(paymentRequired.nonce, 8)} is active for this request.`
+        : accessToken
+          ? "A signed ES256 settlement receipt is available for session reuse."
+          : "Start by requesting a 402 quote.",
+    },
+    {
+      label: "Merchant",
+      value: selectedService ? capitalize(selectedService.merchant.trust?.verificationStatus) : "Unknown",
+      tone: selectedService?.merchant.trust?.verificationStatus === "verified" ? "ok" : "warn",
+      detail: selectedService
+        ? `${selectedService.merchant.name} scores ${selectedService.merchant.trust?.trustScore ?? "n/a"} on the trust profile.`
+        : "Select a service to inspect merchant trust.",
+    },
+  ] as const;
+
+const protocolSteps = [
+  {
+    step: "01",
+    title: "Browse",
+    text: "Apps and agents discover live services, prices, merchant profiles, and trust metadata from one signed registry.",
+  },
+  {
+    step: "02",
+    title: "Quote",
+    text: "Any paid endpoint responds with a machine-readable 402 quote containing amount, recipient, nonce, and settlement network.",
+  },
+  {
+    step: "03",
+    title: "Pay",
+    text: "The buyer settles with TRX or USDT on TRON Nile, while agent policy checks stop mismatched or unsafe requests.",
+  },
+  {
+    step: "04",
+    title: "Unlock",
+    text: "The service verifies the chain payment, returns the purchased payload, and issues a reusable signed receipt.",
+  },
+];
+
+  const renderPayloadInsight = () => {
+    if (!quoteView) {
+      return (
+        <div className="empty-state">
+          <strong>No unlocked payload yet</strong>
+          <p>Run the buyer flow to see live quote, depth, or static content payloads here.</p>
+        </div>
+      );
+    }
+
+    if (quoteView.quote) {
+      return (
+        <div className="payload-grid">
+          <div className="metric-card">
+            <span>Bid</span>
+            <strong>{quoteView.quote.bid?.toFixed(6) ?? "n/a"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Ask</span>
+            <strong>{quoteView.quote.ask?.toFixed(6) ?? "n/a"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Spread</span>
+            <strong>{quoteView.quote.spreadBps?.toFixed(2) ?? "n/a"} bps</strong>
+          </div>
+          <div className="metric-card">
+            <span>Top size</span>
+            <strong>
+              {Math.round((quoteView.quote.bidQty ?? 0) + (quoteView.quote.askQty ?? 0)).toLocaleString()}
+            </strong>
+          </div>
+        </div>
+      );
+    }
+
+    if (quoteView.depth) {
+      const totalBid = (quoteView.depth.bids ?? []).reduce((sum, level) => sum + level.sz, 0);
+      const totalAsk = (quoteView.depth.asks ?? []).reduce((sum, level) => sum + level.sz, 0);
+      return (
+        <div className="payload-grid">
+          <div className="metric-card">
+            <span>Total bid depth</span>
+            <strong>{Math.round(totalBid).toLocaleString()}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Total ask depth</span>
+            <strong>{Math.round(totalAsk).toLocaleString()}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Bid levels</span>
+            <strong>{quoteView.depth.bids?.length ?? 0}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Ask levels</span>
+            <strong>{quoteView.depth.asks?.length ?? 0}</strong>
+          </div>
+        </div>
+      );
+    }
+
+    if (quoteView.data?.content && typeof quoteView.data.content === "object") {
+      return <pre className="pre mono">{JSON.stringify(quoteView.data.content, null, 2)}</pre>;
+    }
+
+    return <pre className="pre mono">{JSON.stringify(quoteView, null, 2)}</pre>;
+  };
 
   return (
-    <div className="layout">
-      <header className="hero">
-        <p className="eyebrow">Nile testnet · TRON settlement</p>
-        <h1>Nile Commerce Gateway</h1>
-        <p className="lede">
-          Pay-per-use APIs for <strong>AI agents</strong> and apps: HTTP{" "}
-          <strong>402 Payment Required</strong>, on-chain verification,{" "}
-          <strong>JWT settlement receipts</strong>, and a merchant audit log — not just a wallet
-          transfer.
-        </p>
-      </header>
-
-      <div className="tabs" role="tablist">
-        <button type="button" className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}>
-          Product
-        </button>
-        <button type="button" className={tab === "buyer" ? "active" : ""} onClick={() => setTab("buyer")}>
-          Buyer / agent
-        </button>
-        <button
-          type="button"
-          className={tab === "merchant" ? "active" : ""}
-          onClick={() => setTab("merchant")}
-        >
-          Merchant
-        </button>
-        <button
-          type="button"
-          className={tab === "security" ? "active" : ""}
-          onClick={() => setTab("security")}
-        >
-          Security
-        </button>
-        <a className="tab-link" href="/openapi.json" target="_blank" rel="noreferrer">
-          OpenAPI
-        </a>
-      </div>
-
-      {tab === "home" && (
-        <div className="grid" style={{ gap: "1.25rem" }}>
-          <div className="card spotlight">
-            <p className="eyebrow" style={{ marginBottom: "0.75rem" }}>Judge snapshot</p>
-            <div className="spotlight-grid">
-              <div>
-                <h2 style={{ marginBottom: "0.55rem" }}>Why this can win</h2>
-                <p className="small" style={{ marginTop: 0 }}>
-                  This is not just a wallet transfer or chatbot wrapper. It turns paid API access
-                  into a verifiable commerce primitive: <strong>402 quote</strong>, <strong>TRON payment</strong>,
-                  <strong> on-chain verification</strong>, <strong>JWT receipt</strong>, and a
-                  <strong> merchant ledger</strong>.
-                </p>
-                <div className="row" style={{ marginTop: "0.85rem" }}>
-                  <span className="badge ok">Verifiable on Nile</span>
-                  <span className="badge ok">Two monetized SKUs</span>
-                  <span className="badge ok">Agent-ready flow</span>
-                  <span className="badge ok">Security story</span>
-                </div>
-              </div>
-
-              <div className="judge-panel">
-                <div className="judge-stat">
-                  <span className="judge-label">Network</span>
-                  <strong>{merchantStatusView?.network ?? "tron-nile"}</strong>
-                </div>
-                <div className="judge-stat">
-                  <span className="judge-label">Settlement asset</span>
-                  <strong>{merchantStatusView?.paymentAsset ?? "USDT"}</strong>
-                </div>
-                <div className="judge-stat">
-                  <span className="judge-label">Merchant receipts</span>
-                  <strong>{summaryView?.totalCount ?? 0}</strong>
-                </div>
-                <div className="judge-stat">
-                  <span className="judge-label">24h activity</span>
-                  <strong>{summaryView?.since24h ?? 0}</strong>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid two">
-            <div className="card">
-            <h2>User journey</h2>
-            <ol className="small" style={{ margin: 0, paddingLeft: "1.2rem", lineHeight: 1.6 }}>
-              <li>
-                <strong>Discover</strong> — pick a priced API (premium quote or market depth).
-              </li>
-              <li>
-                <strong>Price</strong> — server returns <strong>402</strong> + TRON payment details
-                (default: <strong>USDT</strong> on Nile for a "real commerce" story).
-              </li>
-              <li>
-                <strong>Pay</strong> — TronLink or paste txid; settlement is verified on-chain.
-              </li>
-              <li>
-                <strong>Unlock</strong> — receive data + <strong>JWT receipt</strong> (HS256).
-              </li>
-              <li>
-                <strong>Proof</strong> — merchant sees rows in the audit log + Tronscan link.
-              </li>
-            </ol>
-          </div>
-            <div className="card">
-              <h2>TRON-native value</h2>
-              <ul className="small" style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.6 }}>
-                <li>Stablecoin-friendly settlement (USDT TRC-20).</li>
-                <li>Bandwidth / energy make per-call commerce practical.</li>
-                <li>Optional payer allowlist for agent sandboxing.</li>
-                <li>Account Permission Management gives you a real hot-key safety story.</li>
-              </ul>
-              <button type="button" className="primary" style={{ marginTop: "1rem" }} onClick={() => setTab("buyer")}>
-                Run the buyer flow
+    <div className="shell">
+      <div className="backdrop backdrop-one" />
+      <div className="backdrop backdrop-two" />
+      <main className="layout">
+        <section className="hero-panel">
+          <div className="hero-copy">
+            <p className="eyebrow">TRON x402 commerce rail</p>
+            <h1>Buy API access the way software actually works.</h1>
+            <p className="lede">
+              Discover paid services, verify who you are buying from, settle on TRON, and reuse
+              access with signed receipts. Built for humans, apps, and autonomous agents on the
+              same commerce surface.
+            </p>
+            <div className="hero-actions">
+              <button type="button" className="primary" onClick={() => setTab("buyer")}>
+                Start buying
+              </button>
+              <button type="button" className="secondary" onClick={() => setTab("merchant")}>
+                Sell a service
               </button>
             </div>
           </div>
 
-          <div className="grid two">
-            <div className="card">
-              <h2>What Judges Should Notice</h2>
-              <ul className="small" style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.7 }}>
-                <li>
-                  <strong>Real business model:</strong> the product sells two distinct market data SKUs,
-                  not a single hard-coded payment button.
-                </li>
-                <li>
-                  <strong>Proof, not trust:</strong> every unlock is backed by a chain tx, a signed receipt,
-                  and a merchant ledger row.
-                </li>
-                <li>
-                  <strong>Agent commerce:</strong> the same gateway works for browser wallets and autonomous agents.
-                </li>
-                <li>
-                  <strong>Security depth:</strong> replay protection, idempotency, payer allowlists, and constrained keys.
-                </li>
-              </ul>
+          <div className="hero-aside">
+            <div className="signal-card">
+              <span className="signal-label">Marketplace status</span>
+              <strong>{registry?.x402Compatible ? "Live payments enabled" : "Loading"}</strong>
+              <p>Multi-merchant service discovery with direct settlement and reusable access receipts.</p>
             </div>
-
-            <div className="card">
-              <h2>Live Demo Checklist</h2>
-              <div className="checklist">
-                <div className="check-item">
-                  <span className={`badge ${merchantStatusView ? "ok" : "warn"}`}>
-                    {merchantStatusView ? "Ready" : "Waiting"}
-                  </span>
-                  <div>
-                    <strong>Merchant config loaded</strong>
-                    <p className="small">
-                      {merchantStatusView?.merchantAddress
-                        ? `Merchant ${merchantStatusView.merchantAddress.slice(0, 8)}… is serving priced endpoints.`
-                        : "Open the app with the server running to confirm merchant status."}
-                    </p>
-                  </div>
-                </div>
-                <div className="check-item">
-                  <span className={`badge ${tronReady ? "ok" : "warn"}`}>
-                    {tronReady ? "Ready" : "Wallet"}
-                  </span>
-                  <div>
-                    <strong>Buyer wallet on Nile</strong>
-                    <p className="small">
-                      {networkWarning ?? "TronLink is available for the buyer flow."}
-                    </p>
-                  </div>
-                </div>
-                <div className="check-item">
-                  <span className={`badge ${(summaryView?.totalCount ?? 0) > 0 ? "ok" : "warn"}`}>
-                    {(summaryView?.totalCount ?? 0) > 0 ? "Live proof" : "Pending"}
-                  </span>
-                  <div>
-                    <strong>Settlement evidence</strong>
-                    <p className="small">
-                      {(summaryView?.totalCount ?? 0) > 0
-                        ? `${summaryView?.totalCount} payment(s) already recorded in the merchant ledger.`
-                        : "Complete one purchase to populate merchant receipts and Tronscan proof."}
-                    </p>
-                  </div>
-                </div>
+            <div className="hero-metrics">
+              <div className="metric-card">
+                <span>Services</span>
+                <strong>{services.length}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Merchants</span>
+                <strong>{merchants.length}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Purchases</span>
+                <strong>{summaryView?.totalCount ?? 0}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Settlement</span>
+                <strong>{merchantStatusView?.paymentAsset ?? "USDT"}</strong>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </section>
 
-      {tab === "buyer" && (
-        <div className="grid two">
-          <div className="card">
-            <h2>Buyer / agent</h2>
-            {networkWarning && (
-              <p className="banner-warn small" role="status">
-                {networkWarning}
-              </p>
-            )}
-            <p className="small">
-              Service:{" "}
-              <select
-                className="select"
-                value={selectedService?.path ?? ""}
-                onChange={(e) => {
-                  resetFlow();
-                  setSelectedServicePath(e.target.value);
-                }}
-              >
+        <div className="tab-bar" role="tablist" aria-label="Application views">
+          <button type="button" className={tab === "home" ? "active" : ""} onClick={() => setTab("home")}>
+            Marketplace
+          </button>
+          <button type="button" className={tab === "buyer" ? "active" : ""} onClick={() => setTab("buyer")}>
+            Buy
+          </button>
+          <button type="button" className={tab === "merchant" ? "active" : ""} onClick={() => setTab("merchant")}>
+            Sell
+          </button>
+          <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>
+            Trust
+          </button>
+          <a className="tab-link" href="/openapi.json" target="_blank" rel="noreferrer">
+            OpenAPI
+          </a>
+        </div>
+
+        {tab === "home" && (
+          <div className="stack">
+            <section className="panel panel-accent">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">How it works</p>
+                  <h2>One payment surface for buyers, apps, and agents</h2>
+                </div>
+                <p className="section-copy">
+                  Instead of custom integrations or one-off transfers, services expose a consistent
+                  way to discover offers, pay, verify settlement, and keep durable access.
+                </p>
+              </div>
+              <div className="flow-grid">
+                {protocolSteps.map((item) => (
+                  <article className="flow-step" key={item.step}>
+                    <span className="step-index">{item.step}</span>
+                    <h3>{item.title}</h3>
+                    <p>{item.text}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Available now</p>
+                  <h2>Browse live services</h2>
+                </div>
+                <p className="section-copy">
+                  This marketplace is registry-driven, so new merchants and services can appear
+                  without rewriting the frontend every time the catalog changes.
+                </p>
+              </div>
+              <div className="service-grid">
                 {services.map((service) => (
-                  <option key={service.path} value={service.path}>
-                    {service.productName} · {service.merchant.name}
-                  </option>
-                ))}
-              </select>
-              <span className="mono small" style={{ marginLeft: "0.5rem" }}>
-                {resourcePath}
-              </span>
-            </p>
-            {selectedService && (
-              <p className="small">
-                Merchant: <strong>{selectedService.merchant.name}</strong> · Price:{" "}
-                <strong>{selectedService.price.humanReadable}</strong>
-              </p>
-            )}
-            <p className="small">
-              Idempotency-Key: <span className="mono">{idempotencyKey}</span>
-            </p>
-            <div className="row" style={{ marginTop: "0.75rem" }}>
-              <span className={`badge ${tronReady ? "ok" : "warn"}`}>
-                {tronReady ? "TronLink" : "No TronLink"}
-              </span>
-              {lastStatus !== null && <span className="badge">HTTP {lastStatus}</span>}
-            </div>
-
-            <h3>1 — Request (402)</h3>
-            <button type="button" className="primary" onClick={stepRequest402}>
-              Request priced resource
-            </button>
-
-            {paymentRequired && (
-              <>
-                <h3>2 — Pay on Nile</h3>
-                <p className="small">
-                  <strong>{paymentRequired.productName ?? "Resource"}</strong> — send{" "}
-                  <strong>{paymentRequired.amountAsset}</strong>
-                  {paymentRequired.amountAsset === "USDT" && (
-                    <> (~{formatUsdtMinimal(paymentRequired.amount)} USDT)</>
-                  )}{" "}
-                  minimal units: <span className="mono">{paymentRequired.amount}</span>
-                  <br />
-                  To: <span className="mono">{paymentRequired.recipient}</span>
-                  <br />
-                  Nonce: <span className="mono">{paymentRequired.nonce}</span>
-                </p>
-                <div className="row">
-                  {paymentRequired.amountAsset === "TRX" && (
-                    <button type="button" className="secondary" onClick={stepPayTrx}>
-                      Pay with TronLink (TRX)
+                  <article className={`service-card ${selectedService?.id === service.id ? "service-card-active" : ""}`} key={service.id}>
+                    <div className="service-card-top">
+                      <span className="badge badge-neutral">{service.category}</span>
+                      <span className={`badge ${service.merchant.trust?.verificationStatus === "verified" ? "badge-ok" : "badge-warn"}`}>
+                        {capitalize(service.merchant.trust?.verificationStatus)}
+                      </span>
+                    </div>
+                    <h3>{service.productName}</h3>
+                    <p>{service.description}</p>
+                    <div className="service-meta">
+                      <div>
+                        <span>Merchant</span>
+                        <strong>{service.merchant.name}</strong>
+                      </div>
+                      <div>
+                        <span>Price</span>
+                        <strong>{service.price.humanReadable}</strong>
+                      </div>
+                      <div>
+                        <span>Handler</span>
+                        <strong>{service.handler ?? "n/a"}</strong>
+                      </div>
+                      <div>
+                        <span>Trust score</span>
+                        <strong>{service.merchant.trust?.trustScore ?? "n/a"}</strong>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        resetFlow();
+                        setSelectedServicePath(service.path);
+                        setTab("buyer");
+                      }}
+                    >
+                      Buy this service
                     </button>
-                  )}
-                  {paymentRequired.amountAsset === "USDT" && (
-                    <button type="button" className="secondary" onClick={stepPayUsdt}>
-                      Pay with TronLink (USDT)
-                    </button>
-                  )}
-                  {explorerUrl && (
-                    <a href={explorerUrl} target="_blank" rel="noreferrer">
-                      Tronscan
-                    </a>
-                  )}
-                </div>
-
-                <h3>3 — Submit proof</h3>
-                <input
-                  value={manualTxId}
-                  onChange={(e) => setManualTxId(e.target.value)}
-                  placeholder="Nile txid"
-                />
-                <div className="row" style={{ marginTop: "0.65rem" }}>
-                  <button type="button" className="primary" onClick={stepVerifyPayment}>
-                    Verify &amp; unlock
-                  </button>
-                  <button type="button" className="secondary" onClick={resetFlow}>
-                    Reset
-                  </button>
-                </div>
-              </>
-            )}
-
-            {accessToken && (
-              <>
-                <h3>4 — Session (JWT)</h3>
-                <p className="small mono">
-                  Bearer token (same as settlement receipt): {accessToken.slice(0, 48)}…
-                </p>
-                <button type="button" className="secondary" onClick={stepSessionFetch}>
-                  Fetch again with Bearer
-                </button>
-              </>
-            )}
-
-            {quote != null ? (
-              <div style={{ marginTop: "1rem" }}>
-                <h3>Payload</h3>
-                <pre className="mono pre">{JSON.stringify(quote, null, 2)}</pre>
-              </div>
-            ) : null}
-
-            {error && <p className="err" style={{ marginTop: "0.75rem" }}>{error}</p>}
-          </div>
-
-          <div className="card">
-            <h2>Trace log</h2>
-            <p className="small">Use this in your demo video as the agent audit trail.</p>
-            <textarea readOnly value={log.join("\n")} style={{ marginTop: "0.75rem" }} />
-            <h3 className="small-caps" style={{ marginTop: "1rem" }}>
-              Fees &amp; common pitfalls
-            </h3>
-            <ul className="small pitfall-list">
-              <li>
-                <strong>Fees:</strong> TRX pays for <strong>Bandwidth</strong> (simple transfers) and{" "}
-                <strong>Energy</strong> (TRC-20). If a USDT send fails with OUT OF ENERGY, get more
-                Nile TRX or freeze for Energy.
-              </li>
-              <li>
-                <strong>Network:</strong> Server verifies against <strong>Nile</strong> — mainnet txs
-                will not match.
-              </li>
-              <li>
-                <strong>Wrong SKU:</strong> Each resource has its own price; switching resource after
-                402 requires a new payment session.
-              </li>
-              <li>
-                <strong>Verification errors:</strong> The API returns a <span className="mono">hint</span>{" "}
-                field with next steps.
-              </li>
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {tab === "merchant" && (
-        <div className="grid">
-          <div className="card">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2 style={{ margin: 0 }}>Merchant</h2>
-              <button type="button" className="secondary" onClick={loadMerchant}>
-                Refresh
-              </button>
-            </div>
-            <p className="small">
-              Configure <span className="mono">MERCHANT_TRON_ADDRESS</span> and optional{" "}
-              <span className="mono">RECEIPT_PRIVATE_KEY_PEM</span> /{" "}
-              <span className="mono">RECEIPT_PUBLIC_KEY_PEM</span> in <span className="mono">.env</span>.
-            </p>
-            <p className="small">
-              Merchant view:{" "}
-              <select
-                className="select"
-                value={selectedMerchantId}
-                onChange={(e) => setSelectedMerchantId(e.target.value)}
-              >
-                <option value="all">All merchants</option>
-                {merchants.map((merchant) => (
-                  <option key={merchant.id} value={merchant.id}>
-                    {merchant.name}
-                  </option>
+                  </article>
                 ))}
-              </select>
-            </p>
-            <div className="grid two tight" style={{ marginTop: "1rem" }}>
-              <div>
-                <h3 className="small-caps">Status</h3>
-                <pre className="mono pre">{JSON.stringify(merchantInfo, null, 2)}</pre>
               </div>
-              <div>
-                <h3 className="small-caps">Summary (SQLite)</h3>
-                <pre className="mono pre">{JSON.stringify(summary, null, 2)}</pre>
+            </section>
+
+            <section className="grid-two">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">For buyers</p>
+                    <h2>Why someone would use this</h2>
+                  </div>
+                </div>
+                <ul className="feature-list">
+                  <li>Buy once per call, not through subscriptions or manually issued API keys.</li>
+                  <li>See exactly who gets paid, on which network, and for how much before you sign.</li>
+                  <li>Reuse the signed receipt as session proof instead of juggling vendor-specific auth flows.</li>
+                  <li>Keep a verifiable record of what was purchased and when it settled.</li>
+                </ul>
               </div>
-            </div>
-            <h3 className="small-caps" style={{ marginTop: "1rem" }}>
-              Recent settlements
-            </h3>
-            <div style={{ overflowX: "auto" }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Resource</th>
-                    <th>Payer</th>
-                    <th>Asset</th>
-                    <th>Tx</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paymentRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="small">
-                        No rows yet — complete a payment on the Buyer tab.
-                      </td>
-                    </tr>
-                  ) : (
-                    paymentRows.map((r) => (
-                      <tr key={r.txId}>
-                        <td className="mono">{r.createdAt.slice(11, 19)}</td>
-                        <td className="mono">{r.resource.replace("/v1/agent/", "")}</td>
-                        <td className="mono">{r.payer.slice(0, 6)}…</td>
-                        <td>{r.asset}</td>
-                        <td>
-                          <a href={r.explorer} target="_blank" rel="noreferrer">
-                            view
-                          </a>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">For merchants</p>
+                    <h2>Why someone would sell through it</h2>
+                  </div>
+                </div>
+                <div className="proof-list">
+                  <div className="proof-item">
+                    <strong>Direct settlement</strong>
+                    <p>The buyer pays the merchant address directly instead of funding a central balance.</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Reusable onboarding</strong>
+                    <p>New merchants and services can be added through the catalog and onboarding APIs.</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Operational visibility</strong>
+                    <p>Receipts, pending sessions, and settlement history are available in one merchant view.</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Built for real usage</p>
+                  <h2>More than a single narrow demo</h2>
+                </div>
+                <p className="section-copy">
+                  The same payment and receipt flow can gate market data, research briefs, analytics,
+                  or any fixed-shape API response. The product surface is the marketplace, not one SKU.
+                </p>
+              </div>
+              <div className="flow-grid compact">
+                <article className="flow-step">
+                  <h3>Apps</h3>
+                  <p>Frontend clients can request and unlock paid responses without custom merchant integrations.</p>
+                </article>
+                <article className="flow-step">
+                  <h3>Agents</h3>
+                  <p>Autonomous agents can discover services, enforce policy, and pay safely with constrained hot keys.</p>
+                </article>
+                <article className="flow-step">
+                  <h3>Merchants</h3>
+                  <p>Providers publish priced endpoints, expose trust metadata, and receive direct settlement on TRON.</p>
+                </article>
+                <article className="flow-step">
+                  <h3>Operators</h3>
+                  <p>Receipts, ledger rows, and risk events make the system auditable without hiding behind screenshots.</p>
+                </article>
+              </div>
+            </section>
           </div>
-        </div>
-      )}
+        )}
 
-      {tab === "security" && (
-        <div className="grid" style={{ gap: "1.25rem" }}>
+        {tab === "buyer" && (
+          <div className="grid-two buyer-grid">
+            <section className="panel">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Checkout</p>
+                  <h2>Pick a service and unlock it</h2>
+                </div>
+              </div>
 
-          {/* Threat model */}
-          <div className="card">
-            <h2>Threat model</h2>
-            <p className="small" style={{ marginBottom: "0.75rem" }}>
-              Every attack vector handled by this gateway with on-chain or server-side controls.
-            </p>
-            <div style={{ overflowX: "auto" }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Attack</th>
-                    <th>Mitigation</th>
-                    <th>Where enforced</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    ["Wrong recipient", "Server re-fetches tx; verifies recipient === merchant address", "tronVerify.ts on-chain"],
-                    ["Underpayment", "Checks amount ≥ required minimal units (BigInt)", "tronVerify.ts on-chain"],
-                    ["Wrong asset / contract", "TRC-20 verifies contract address === USDT contract", "tronVerify.ts on-chain"],
-                    ["Tx replay (double-unlock)", "UNIQUE constraint on tx_id in SQLite; checked before insert", "db.ts + commerceRoutes.ts"],
-                    ["Nonce brute-force", "Nonces are 16 random bytes (2¹²⁸ space); 30-min TTL", "memoryStore.ts"],
-                    ["Invalid txid injection", "Regex validates 64 hex chars before any network call", "commerceRoutes.ts"],
-                    ["Cross-SKU confusion", "Idempotency key scoped per resource path (prefix + key)", "commerceRoutes.ts"],
-                    ["JWT forgery", "ES256 signed; issuer + audience checked with public-key verification", "receipts.ts"],
-                    ["Session hijacking", "JWT exp enforced; audience = 'agent-client'", "receipts.ts (jose)"],
-                    ["Mainnet tx (real money)", "Server pinned to Nile; mainnet txids reference wrong network", "config.ts + TronGrid"],
-                    ["Rate limit abuse", "240 req/min server-wide (health & OpenAPI exempt)", "index.ts (@fastify/rate-limit)"],
-                    ["Payer sandbox escape", "ALLOWED_PAYER_ADDRESSES allowlist blocks unknown agents", "commerceRoutes.ts"],
-                  ].map(([attack, mitigation, where]) => (
-                    <tr key={attack}>
-                      <td className="mono" style={{ whiteSpace: "nowrap" }}>{attack}</td>
-                      <td className="small">{mitigation}</td>
-                      <td className="mono small" style={{ color: "var(--ok)", whiteSpace: "nowrap" }}>{where}</td>
-                    </tr>
+              <div className="service-picker">
+                <label htmlFor="service-select">Service</label>
+                <select
+                  id="service-select"
+                  className="select"
+                  value={selectedService?.path ?? ""}
+                  onChange={(event) => {
+                    resetFlow();
+                    setSelectedServicePath(event.target.value);
+                  }}
+                >
+                  {services.map((service) => (
+                    <option key={service.path} value={service.path}>
+                      {service.productName} · {service.price.humanReadable}
+                    </option>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </select>
+              </div>
+
+              {selectedService && (
+                <div className="service-summary">
+                  <div>
+                    <span>Merchant</span>
+                    <strong>{selectedService.merchant.name}</strong>
+                  </div>
+                  <div>
+                    <span>Recipient</span>
+                    <strong className="mono">{shortAddress(selectedService.payment.recipient, 8)}</strong>
+                  </div>
+                  <div>
+                    <span>Price</span>
+                    <strong>{selectedService.price.humanReadable}</strong>
+                  </div>
+                  <div>
+                    <span>Controls</span>
+                    <strong>{serviceControls.length}</strong>
+                  </div>
+                </div>
+              )}
+
+              <div className="action-stack">
+                <div className="action-card">
+                  <div>
+                    <span className="step-index">1</span>
+                    <h3>Request the priced resource</h3>
+                  </div>
+                  <p>Fetch the endpoint and capture the HTTP 402 quote with nonce, amount, and recipient.</p>
+                  <button type="button" className="primary" onClick={stepRequest402}>
+                    Request 402 quote
+                  </button>
+                </div>
+
+                {paymentRequired && (
+                  <>
+                    <div className="action-card">
+                      <div>
+                        <span className="step-index">2</span>
+                        <h3>Pay on TRON Nile</h3>
+                      </div>
+                      <p>
+                        Send <strong>{paymentRequired.amountAsset}</strong>{" "}
+                        {paymentRequired.amountAsset === "USDT" ? `(~${formatUsdtMinimal(paymentRequired.amount)} USDT)` : null}
+                        {" "}to <span className="mono">{shortAddress(paymentRequired.recipient, 9)}</span>.
+                      </p>
+                      <div className="inline-meta">
+                        <span>Nonce</span>
+                        <strong className="mono">{paymentRequired.nonce}</strong>
+                      </div>
+                      <div className="button-row">
+                        {paymentRequired.amountAsset === "TRX" ? (
+                          <button type="button" className="secondary" onClick={stepPayTrx}>
+                            Pay with TronLink (TRX)
+                          </button>
+                        ) : (
+                          <button type="button" className="secondary" onClick={stepPayUsdt}>
+                            Pay with TronLink (USDT)
+                          </button>
+                        )}
+                        {explorerUrl && (
+                          <a className="link-button" href={explorerUrl} target="_blank" rel="noreferrer">
+                            View tx
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="action-card">
+                      <div>
+                        <span className="step-index">3</span>
+                        <h3>Submit proof and unlock</h3>
+                      </div>
+                      <p>Paste or reuse the txid, then let the server verify it against the pending session.</p>
+                      <input
+                        value={manualTxId}
+                        onChange={(event) => setManualTxId(event.target.value)}
+                        placeholder="Paste Nile txid"
+                      />
+                      <div className="button-row">
+                        <button type="button" className="primary" onClick={stepVerifyPayment}>
+                          Verify payment
+                        </button>
+                        <button type="button" className="ghost" onClick={resetFlow}>
+                          Reset flow
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {accessToken && (
+                  <div className="action-card">
+                    <div>
+                      <span className="step-index">4</span>
+                      <h3>Reuse the receipt as a session token</h3>
+                    </div>
+                    <p>The signed settlement receipt can be sent back as Bearer auth for session reuse.</p>
+                    <div className="inline-meta">
+                      <span>Receipt preview</span>
+                      <strong className="mono">{accessToken.slice(0, 48)}…</strong>
+                    </div>
+                    <button type="button" className="secondary" onClick={stepSessionFetch}>
+                      Fetch with Bearer receipt
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {error && <p className="err">{error}</p>}
+            </section>
+
+            <section className="stack">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Readiness</p>
+                    <h2>Current payment context</h2>
+                  </div>
+                </div>
+                <div className="readiness-list">
+                  {buyerChecklist.map((item) => (
+                    <div className="readiness-item" key={item.label}>
+                      <span className={`badge badge-${item.tone}`}>{item.value}</span>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <p>{item.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="inline-meta">
+                  <span>Idempotency key</span>
+                  <strong className="mono">{idempotencyKey}</strong>
+                </div>
+                {lastStatus !== null && (
+                  <div className="inline-meta">
+                    <span>Last HTTP status</span>
+                    <strong>{lastStatus}</strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Unlocked payload</p>
+                    <h2>What the buyer actually received</h2>
+                  </div>
+                </div>
+                {renderPayloadInsight()}
+              </div>
+
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Trace</p>
+                    <h2>Buyer audit trail</h2>
+                  </div>
+                </div>
+                <textarea readOnly value={log.join("\n")} />
+              </div>
+            </section>
           </div>
+        )}
 
-          {/* TRON Account Permission Management */}
-          <div className="card">
-            <h2>TRON Account Permission Management</h2>
-            <p className="small" style={{ marginBottom: "0.75rem" }}>
-              Use TRON's native{" "}
-              <a href="https://developers.tron.network/docs/multi-signature" target="_blank" rel="noreferrer">
-                Account Permission Management
-              </a>{" "}
-              to create a <strong>constrained agent key</strong>: the hot key can only send small payments —
-              it cannot move cold funds, change permissions, or stake TRX.
-              Run <span className="mono">npm run permission-setup</span> to see the live demo.
-            </p>
+        {tab === "merchant" && (
+          <div className="stack">
+            <section className="grid-two">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Seller dashboard</p>
+                    <h2>Revenue and session activity</h2>
+                  </div>
+                  <button type="button" className="ghost" onClick={loadMerchant}>
+                    Refresh
+                  </button>
+                </div>
+                <div className="merchant-selector">
+                  <label htmlFor="merchant-select">Merchant view</label>
+                  <select
+                    id="merchant-select"
+                    className="select"
+                    value={selectedMerchantId}
+                    onChange={(event) => setSelectedMerchantId(event.target.value)}
+                  >
+                    <option value="all">All merchants</option>
+                    {merchants.map((merchant) => (
+                      <option key={merchant.id} value={merchant.id}>
+                        {merchant.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="hero-metrics">
+                  <div className="metric-card">
+                    <span>Total receipts</span>
+                    <strong>{summaryView?.totalCount ?? 0}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Last 24h</span>
+                    <strong>{summaryView?.since24h ?? 0}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>USDT settled</span>
+                    <strong>{summaryView?.totalUsdtLike ? `${formatUsdtMinimal(summaryView.totalUsdtLike)} USDT` : "0"}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Pending sessions</span>
+                    <strong>{summaryView?.pending?.totalPending ?? 0}</strong>
+                  </div>
+                </div>
+              </div>
 
-            <h3>Permission architecture</h3>
-            <pre className="mono pre" style={{ fontSize: "0.78rem" }}>{permArchDiagram}</pre>
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Receipt profile</p>
+                    <h2>Verification info</h2>
+                  </div>
+                </div>
+                <div className="proof-list">
+                  <div className="proof-item">
+                    <strong>Network</strong>
+                    <p>{merchantStatusView?.network ?? "tron-nile"}</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Settlement asset</strong>
+                    <p>{merchantStatusView?.paymentAsset ?? "USDT"}</p>
+                  </div>
+                  <div className="proof-item">
+                    <strong>Issuer / audience</strong>
+                    <p>
+                      {merchantStatusView?.receiptVerification?.issuer ?? "tron-commerce-gateway"} /{" "}
+                      {merchantStatusView?.receiptVerification?.audience ?? "agent-client"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
 
-            <h3>TronWeb setup (from permission-setup script)</h3>
-            <pre className="mono pre" style={{ fontSize: "0.78rem" }}>{permCodeSnippet}</pre>
+            <section className="grid-two">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Catalog</p>
+                    <h2>Merchant status JSON</h2>
+                  </div>
+                </div>
+                <pre className="pre mono">{JSON.stringify(merchantInfo, null, 2)}</pre>
+              </div>
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Ledger summary</p>
+                    <h2>Settlement summary JSON</h2>
+                  </div>
+                </div>
+                <pre className="pre mono">{JSON.stringify(summary, null, 2)}</pre>
+              </div>
+            </section>
 
-            <p className="small" style={{ marginTop: "0.75rem" }}>
-              After setup the agent key can call{" "}
-              <span className="mono">transactionBuilder.sendTrx()</span> freely
-              but any attempt to update permissions, freeze funds, or trigger contracts
-              will be rejected by the network — <strong>even if the agent is compromised</strong>.
-            </p>
+            <section className="panel">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Recent proof</p>
+                  <h2>Merchant settlement ledger</h2>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Resource</th>
+                      <th>Payer</th>
+                      <th>Asset</th>
+                      <th>Amount</th>
+                      <th>Explorer</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6}>No settled payments yet. Complete one buyer flow to populate the ledger.</td>
+                      </tr>
+                    ) : (
+                      paymentRows.map((row) => (
+                        <tr key={row.txId}>
+                          <td className="mono">{row.createdAt.replace("T", " ").slice(0, 19)}</td>
+                          <td className="mono">{row.resource}</td>
+                          <td className="mono">{shortAddress(row.payer)}</td>
+                          <td>{row.asset}</td>
+                          <td>{row.asset === "USDT" ? `${formatUsdtMinimal(row.amountUnits)} USDT` : row.amountUnits}</td>
+                          <td>
+                            <a href={row.explorer} target="_blank" rel="noreferrer">
+                              View tx
+                            </a>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </div>
+        )}
 
-          {/* OPSEC checklist */}
-          <div className="grid two">
-            <div className="card">
-              <h2>OPSEC checklist for agent developers</h2>
-              <ul className="small" style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.7 }}>
-                <li>
-                  <strong>Never use your owner key</strong> in agent code. Create a separate
-                  hot key and constrain it with Account Permission Management.
-                </li>
-                <li>
-                  <strong>Validate 402 responses</strong> before signing: check{" "}
-                  <span className="mono">x402Version</span>,{" "}
-                  <span className="mono">scheme === "tron-settlement"</span>,{" "}
-                  <span className="mono">network === "tron-nile"</span>, and that the
-                  recipient is a known merchant address.
-                </li>
-                <li>
-                  <strong>Cap payment amounts</strong>: reject{" "}
-                  <span className="mono">paymentRequired.amount</span> above a configurable
-                  per-request ceiling before signing.
-                </li>
-                <li>
-                  <strong>Pin the merchant address</strong>: hard-code or fetch from a
-                  trusted registry — never accept an arbitrary recipient from an API response.
-                </li>
-                <li>
-                  <strong>Use idempotency keys</strong>: prevents accidental double-payment
-                  on network retries.
-                </li>
-                <li>
-                  <strong>Store JWT receipts</strong>: they are your proof of payment; keep
-                  them for dispute resolution.
-                </li>
-                <li>
-                  <strong>Rotate receipt keypairs</strong> carefully; old receipts will
-                  stop verifying against the new public key unless you keep prior keys available.
-                </li>
-              </ul>
-            </div>
+        {tab === "security" && (
+          <div className="stack">
+            <section className="grid-two">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Trust layer</p>
+                    <h2>Why buyers can rely on this</h2>
+                  </div>
+                </div>
+                <div className="flow-grid compact">
+                  {[
+                    {
+                      title: "Agent policy checks",
+                      text: "The agent validates scheme, network, merchant recipient, amount, trust score, and manifests before paying.",
+                    },
+                    {
+                      title: "Replay protection",
+                      text: "Nonce + tx uniqueness in SQLite stop the same transfer from unlocking multiple times.",
+                    },
+                    {
+                      title: "Signed trust layer",
+                      text: "Registry entries and receipts use ES256 so discovery and settlement are independently verifiable.",
+                    },
+                    {
+                      title: "Durable recovery",
+                      text: "Pending sessions survive process restarts and can still be reconciled against late confirmations.",
+                    },
+                  ].map((item) => (
+                    <article className="flow-step" key={item.title}>
+                      <h3>{item.title}</h3>
+                      <p>{item.text}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
 
-            <div className="card">
-              <h2>Verifiable artifacts</h2>
-              <p className="small">Every completed payment produces three independent proofs:</p>
-              <ol className="small" style={{ margin: "0.5rem 0 0", paddingLeft: "1.2rem", lineHeight: 1.7 }}>
-                <li>
-                  <strong>On-chain tx</strong> — view on{" "}
-                  <a href="https://nile.tronscan.org" target="_blank" rel="noreferrer">
-                    Nile TronScan
-                  </a>{" "}
-                  with the txid from the settlement receipt.
-                </li>
-                <li>
-                  <strong>JWT settlement receipt</strong> — decode at{" "}
-                  <a href="https://jwt.io" target="_blank" rel="noreferrer">jwt.io</a>{" "}
-                  using the public key from <span className="mono">/.well-known/jwks.json</span>
-                  or <span className="mono">/v1/merchant/status</span>; contains txId, payer, merchant, chain, asset.
-                </li>
-                <li>
-                  <strong>SQLite audit log</strong> —{" "}
-                  <span className="mono">GET /v1/merchant/payments</span> returns every
-                  settled row with block number and Tronscan link.
-                </li>
-              </ol>
-              <p className="small" style={{ marginTop: "0.75rem" }}>
-                A malicious server <em>cannot fabricate</em> proof #1 — the on-chain tx either
-                exists and matches, or verification fails.
-              </p>
-            </div>
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Merchant posture</p>
+                    <h2>Verification and identity signals</h2>
+                  </div>
+                </div>
+                <div className="proof-list">
+                  {merchants.map((merchant) => (
+                    <div className="proof-item" key={merchant.id}>
+                      <strong>{merchant.name}</strong>
+                      <p>
+                        {capitalize(merchant.trust?.verificationStatus)} · trust score{" "}
+                        {merchant.trust?.trustScore ?? "n/a"} · {merchant.trust?.controls?.join(", ") || "No controls listed"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="grid-two">
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Agent permissions</p>
+                    <h2>Constrained hot-key execution</h2>
+                  </div>
+                </div>
+                <pre className="pre mono">{[
+                  "OWNER permission",
+                  "  cold wallet key",
+                  "  full control, kept offline",
+                  "",
+                  "ACTIVE permission 'agent-active'",
+                  "  agent hot key",
+                  "  allowed: TransferContract, TriggerSmartContract",
+                  "  blocked: UpdatePermission, freeze/stake changes, governance ops",
+                ].join("\n")}</pre>
+              </div>
+
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Product safety</p>
+                    <h2>What users should see before they pay</h2>
+                  </div>
+                </div>
+                <ul className="feature-list">
+                  <li>Always show the recipient, amount, network, and tx explorer link before asking the wallet to sign.</li>
+                  <li>Make trust score and verification state visible near the CTA, not buried in advanced settings.</li>
+                  <li>Explain that the JWT is a settlement receipt, not just another session token.</li>
+                  <li>Keep the trace log human-readable so buyers understand why a payment was accepted or refused.</li>
+                </ul>
+              </div>
+            </section>
           </div>
-
-        </div>
-      )}
+        )}
+      </main>
     </div>
   );
 }

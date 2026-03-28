@@ -15,6 +15,7 @@ export type PaymentRequired = {
 export type RegistryService = {
   id: string;
   path: string;
+  handler?: string;
   productName: string;
   description: string;
   category: string;
@@ -23,6 +24,17 @@ export type RegistryService = {
     id: string;
     name: string;
     address: string;
+    trust?: {
+      verificationStatus?: string;
+      trustScore?: number;
+      riskTier?: string;
+      controls?: string[];
+    };
+  };
+  trust?: {
+    riskCategory?: string;
+    safeguards?: string[];
+    minVerification?: string;
   };
   price: {
     asset: "TRX" | "USDT";
@@ -43,7 +55,17 @@ export type RegistryResponse = {
   paymentScheme: string;
   x402Compatible: boolean;
   marketplace?: boolean;
-  merchants?: Array<{ id: string; name: string; address: string }>;
+  merchants?: Array<{
+    id: string;
+    name: string;
+    address: string;
+    trust?: {
+      verificationStatus?: string;
+      trustScore?: number;
+      riskTier?: string;
+      controls?: string[];
+    };
+  }>;
   services: RegistryService[];
 };
 
@@ -53,7 +75,7 @@ export type Error402Body = {
   paymentRequired?: PaymentRequired;
 };
 
-const apiBase = "";
+const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "");
 
 export const RESOURCE = {
   premium: "/v1/agent/premium-quote",

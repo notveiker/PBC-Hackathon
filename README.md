@@ -89,6 +89,66 @@ npm run dev
 
 The server reads `.env` from the **repository root**.
 
+## Public deployment
+
+The easiest shareable setup is:
+
+- **Frontend** on **Vercel**
+- **Backend** on **Railway** or **Render**
+
+### 1. Deploy the backend
+
+Deploy the repository as a Node service and run:
+
+```bash
+npm install
+npm run start -w server
+```
+
+Set backend env vars:
+
+```bash
+MERCHANT_TRON_ADDRESS=...
+SECONDARY_MERCHANT_TRON_ADDRESS=...   # optional
+PAYMENT_ASSET=USDT
+TRON_FULL_HOST=https://nile.trongrid.io
+TRONGRID_API_KEY=...                  # optional but recommended
+DATABASE_PATH=data/commerce.db
+RECEIPT_PRIVATE_KEY_PEM=...
+RECEIPT_PUBLIC_KEY_PEM=...
+CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app
+```
+
+After deploy, note the public backend URL, for example:
+
+```bash
+https://your-backend.up.railway.app
+```
+
+### 2. Deploy the frontend to Vercel
+
+Use the `web/` workspace as the Vercel project root.
+
+Build settings:
+
+```bash
+Install command: npm install
+Build command: npm run build -w web
+Output directory: web/dist
+```
+
+Set this frontend env var in Vercel:
+
+```bash
+VITE_API_BASE_URL=https://your-backend.up.railway.app
+```
+
+That makes the frontend call the public backend instead of the local dev proxy.
+
+### 3. Share one URL
+
+Once both are deployed, send the Vercel URL. The UI will talk to the public backend and the full marketplace flow will be available to anyone with that link.
+
 ## Judge / video flow (complete journey)
 
 1. **Product** tab — explain pay-per-use + TRON settlement.

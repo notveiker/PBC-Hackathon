@@ -16,6 +16,11 @@ const big = (v: string | undefined, fallback: bigint) =>
 
 export const config = {
   port: num(process.env.PORT, 3001),
+  /** Optional frontend allowlist for CORS. Empty = allow any origin. */
+  corsAllowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   /** Merchant payout address (Base58 T...) — required for payment verification */
   merchantAddress: process.env.MERCHANT_TRON_ADDRESS ?? "",
   /** Optional second merchant to demonstrate a marketplace registry */

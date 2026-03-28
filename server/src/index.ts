@@ -17,7 +17,22 @@ export async function buildServer() {
   const { tronWeb } = createTronWeb(config.fullHost, config.tronGridApiKey || undefined);
 
   const app = Fastify({ logger: true });
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      if (!origin) {
+        cb(null, true);
+        return;
+      }
+      if (
+        config.corsAllowedOrigins.length === 0 ||
+        config.corsAllowedOrigins.includes(origin)
+      ) {
+        cb(null, true);
+        return;
+      }
+      cb(new Error(`Origin not allowed by CORS: ${origin}`), false);
+    },
+  });
   await app.register(rateLimit, {
     global: true,
     max: 240,
