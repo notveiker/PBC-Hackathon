@@ -309,7 +309,7 @@ button { cursor: pointer; }
 .pillar-card strong { display: block; margin-bottom: 0.45rem; color: var(--text-strong); font-size: 0.9375rem; }
 .pillar-card p { margin: 0; line-height: 1.55; font-size: 0.875rem; }
 
-.hero-aside { display: grid; gap: 1rem; align-content: start; }
+.hero-aside { display: grid; gap: 0.75rem; align-content: stretch; }
 
 /* ── Signal Card ────────────────────────────── */
 
@@ -341,9 +341,14 @@ button { cursor: pointer; }
 .signal-stats span { display: block; margin-bottom: 0.2rem; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .signal-stats strong { font-size: 0.9375rem; color: var(--text-strong); }
 
+.hero-metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
 .metric-card {
   min-width: 0;
-  flex: 1 1 120px;
   padding: 0.7rem 0.85rem;
   border-radius: 12px;
   background: var(--card-inner);

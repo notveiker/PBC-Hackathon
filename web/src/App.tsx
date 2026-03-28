@@ -1489,7 +1489,7 @@ const productModules = [
                   </div>
                 </div>
               </div>
-              <div className="hero-metrics">
+              <div className="hero-metrics-grid">
                 <div className="metric-card">
                   <span>Services</span>
                   <strong>{services.length}</strong>
