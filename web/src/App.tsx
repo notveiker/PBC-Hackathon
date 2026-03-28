@@ -515,9 +515,9 @@ const protocolSteps = [
             <p className="eyebrow">TRON x402 commerce rail</p>
             <h1>Buy API access the way software actually works.</h1>
             <p className="lede">
-              Discover paid services, verify who you are buying from, settle on TRON, and reuse
-              access with signed receipts. Built for humans, apps, and autonomous agents on the
-              same commerce surface.
+              Built around one concrete job: an AI trading or analytics agent buying premium market
+              data on demand. Discover paid services, verify who you are buying from, settle on
+              TRON, and reuse access with signed receipts.
             </p>
             <div className="hero-actions">
               <button type="button" className="primary" onClick={() => setTab("buyer")}>
@@ -673,22 +673,22 @@ const protocolSteps = [
               <div className="panel">
                 <div className="section-heading compact">
                   <div>
-                    <p className="eyebrow">For merchants</p>
-                    <h2>Why someone would sell through it</h2>
+                    <p className="eyebrow">Primary use case</p>
+                    <h2>Premium market data for autonomous trading agents</h2>
                   </div>
                 </div>
                 <div className="proof-list">
                   <div className="proof-item">
-                    <strong>Direct settlement</strong>
-                    <p>The buyer pays the merchant address directly instead of funding a central balance.</p>
+                    <strong>On-demand data purchases</strong>
+                    <p>An agent can buy quotes or depth only when needed instead of paying for broad subscriptions.</p>
                   </div>
                   <div className="proof-item">
-                    <strong>Reusable onboarding</strong>
-                    <p>New merchants and services can be added through the catalog and onboarding APIs.</p>
+                    <strong>Constrained agent payments</strong>
+                    <p>Before paying, the agent checks network, merchant, trust score, and spend limits.</p>
                   </div>
                   <div className="proof-item">
-                    <strong>Operational visibility</strong>
-                    <p>Receipts, pending sessions, and settlement history are available in one merchant view.</p>
+                    <strong>Verifiable execution</strong>
+                    <p>Every purchase maps to a TRON transaction, a signed receipt, and a merchant ledger row.</p>
                   </div>
                 </div>
               </div>
@@ -896,6 +896,59 @@ const protocolSteps = [
                     <strong>{lastStatus}</strong>
                   </div>
                 )}
+              </div>
+
+              <div className="panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Agent policy</p>
+                    <h2>What gets checked before paying</h2>
+                  </div>
+                </div>
+                <div className="readiness-list">
+                  <div className="readiness-item">
+                    <span className="badge badge-ok">TRON Nile</span>
+                    <div>
+                      <strong>Expected network</strong>
+                      <p>Quotes must match the pinned settlement network before the agent or buyer proceeds.</p>
+                    </div>
+                  </div>
+                  <div className="readiness-item">
+                    <span className={`badge ${selectedService ? "badge-ok" : "badge-neutral"}`}>
+                      {selectedService ? "Allowlisted" : "Waiting"}
+                    </span>
+                    <div>
+                      <strong>Merchant recipient</strong>
+                      <p>
+                        Recipient must match the merchant address in the signed registry entry:
+                        {" "}
+                        <span className="mono">{selectedService ? shortAddress(selectedService.payment.recipient, 8) : "n/a"}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="readiness-item">
+                    <span className={`badge ${selectedService ? "badge-ok" : "badge-neutral"}`}>
+                      {selectedService?.price.humanReadable ?? "No quote"}
+                    </span>
+                    <div>
+                      <strong>Spend cap</strong>
+                      <p>Amounts are checked against local max-spend policy before any wallet action is taken.</p>
+                    </div>
+                  </div>
+                  <div className="readiness-item">
+                    <span className={`badge ${selectedService?.merchant.trust?.trustScore && selectedService.merchant.trust.trustScore >= 70 ? "badge-ok" : "badge-warn"}`}>
+                      {selectedService?.merchant.trust?.trustScore ?? "n/a"}
+                    </span>
+                    <div>
+                      <strong>Trust threshold</strong>
+                      <p>Trust score and signed merchant manifests must clear policy before the agent pays.</p>
+                    </div>
+                  </div>
+                </div>
+                <p className="section-copy" style={{ marginTop: "0.9rem" }}>
+                  Why TRON for agents? TRON’s Account Permission Management lets agent keys be restricted
+                  to payment-oriented actions, reducing wallet-drain risk if a hot key is compromised.
+                </p>
               </div>
 
               <div className="panel">

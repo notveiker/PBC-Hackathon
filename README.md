@@ -2,6 +2,10 @@
 
 A **product-shaped** demo for **AI + commerce on TRON**: priced HTTP APIs return **402 Payment Required**, settlement is verified on **Nile** (TRX or **USDT TRC-20**), the server issues **asymmetrically signed JWT settlement receipts**, and every paid unlock is written to a **SQLite audit log** with a merchant dashboard — not “chat + transfer.”
 
+**Core insight:** TRON is not only the payment rail here; it is also the trust and safety layer for autonomous buyers through payment verification and constrained account permissions.
+
+**Primary demo use case:** an AI trading or analytics agent purchasing premium market data on demand with TRON settlement.
+
 ## Why This Should Score Well
 
 This repo is not just a trading demo. It is a **reusable TRON agent-commerce primitive**:
@@ -49,7 +53,7 @@ The forum post is the canonical “stack + testnet + tools” overview. This pro
 
 ## Fast Judge Pitch
 
-“This project brings x402-style agent payments to TRON. An agent discovers paid services, receives a standardized 402 quote, verifies the merchant and service manifests, pays on Nile, gets an ES256 receipt, and the merchant records the unlock in SQLite. We also added TRON permission controls and risk checks so the agent does not blindly sign malicious payment requests.”
+“This project brings x402-style agent payments to TRON for one concrete job: an AI trading or analytics agent buying premium market data on demand. The agent discovers paid services, receives a standardized 402 quote, verifies the merchant and service manifests, checks network, recipient, spend cap, and trust threshold, pays on Nile, gets an ES256 receipt, and the merchant records the unlock in SQLite. TRON matters here not just as settlement, but as the safety model through Account Permission Management.”
 
 ## Judging criteria (how this maps)
 
